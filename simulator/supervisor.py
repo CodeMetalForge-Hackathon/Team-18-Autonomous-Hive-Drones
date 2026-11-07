@@ -18,16 +18,20 @@ def validate_belief(value,observed_sortie,previous=None):
     previous=previous if isinstance(previous,dict) else {}
     prior_revision=previous.get('revision',0)
     if type(prior_revision) is not int:prior_revision=0
-    changed=any(value.get(k,[])!=previous.get(k,[]) for k in ('occupied','free','landmarks'))
+    changed=any(value.get(k,[])!=previous.get(k,[]) for k in ('occupied','free','landmarks','shelters'))
     if revision<prior_revision or changed and revision<=prior_revision:raise ValueError('Increase map revision when point beliefs change; never decrease it')
-    for kind in ('occupied','free','landmarks'):
-        points=value.get(kind)
+    for kind in ('occupied','free','landmarks','shelters'):
+        points=value.get(kind,[] if kind=='shelters' else None)
         if not isinstance(points,list) or len(points)>2000:raise ValueError('Map point lists must contain at most 2000 entries each')
         for point in points:
             if not isinstance(point,dict) or not all(type(point.get(k)) in (int,float) and math.isfinite(point[k]) and abs(point[k])<10000 for k in ('x','y')):raise ValueError('Map points need finite dock-relative coordinates')
             if type(point.get('confidence')) not in (int,float) or not 0<=point['confidence']<=1:raise ValueError('Every map point needs confidence 0..1')
             if type(point.get('last_seen_sortie')) is not int or not 0<=point['last_seen_sortie']<=observed_sortie:raise ValueError('Every map point needs a valid last_seen_sortie; future evidence does not exist')
             if point.get('status') not in ('observed','uncertain','revised'):raise ValueError('Map point status must be observed, uncertain or revised')
+    for shelter in value.get('shelters',[]):
+        if shelter.get('shelter_status') not in ('candidate','verified','stale','blocked'):raise ValueError('Shelter needs candidate, verified, stale or blocked status')
+        if shelter.get('shelter_status')=='verified':
+            if type(shelter.get('light_max')) not in (int,float) or not 0<=shelter['light_max']<=.3 or type(shelter.get('dwell_seconds')) not in (int,float) or shelter['dwell_seconds']<2 or not isinstance(shelter.get('evidence'),list) or not shelter['evidence']:raise ValueError('Verified shelters need measured low-light dwell and evidence')
     changes=value.get('changes',[])
     if not isinstance(changes,list) or len(changes)>100:raise ValueError('Map changes must be a compact list')
     for change in changes:
@@ -41,7 +45,7 @@ def compact(text):
 def safe_map(value):
     if not isinstance(value,dict):return {'frame':'dock-relative-cm','occupied':[],'free':[],'landmarks':[],'notes':'No published map yet.'}
     result={k:value[k] for k in ('frame','revision','notes','changes') if k in value}
-    for key in ('occupied','free','landmarks'):
+    for key in ('occupied','free','landmarks','shelters'):
         items=value.get(key,[]);result[key]=items[:2000] if isinstance(items,list) else []
     if not isinstance(result.get('changes',[]),list):result['changes']=[]
     if 'changes' in result:result['changes']=result['changes'][:100]
@@ -76,7 +80,34 @@ def projection(harness):
                     if samples:
                         s=samples[-1]['readings'];returned={'x':s['odom_x'],'y':s['odom_y'],'yaw':s['yaw'],'sortie':brief.get('observed_sortie') if isinstance(brief,dict) else debrief.get('observed_sortie') if isinstance(debrief,dict) else None}
             except (OSError,ValueError,KeyError):pass
+    live=read('live.json');live_stamp=0
+    if agent:
+        p=agent/'live.json'
+        if p.is_file() and not p.is_symlink():live_stamp=p.stat().st_mtime
+    if not isinstance(live,dict) or live.get('kind') not in KINDS or not isinstance(live.get('text'),str) or not 1<=len(live['text'])<=72 or len(live['text'].split())>12 or '\n' in live['text'] or live.get('confidence','uncertain') not in ('observed','uncertain','revised'):live=None
+    else:live={k:live[k] for k in ('kind','text','confidence') if k in live}
+    report_stamp=0
+    if agent:
+        p=agent/('supervisor.json' if source=='opus' else 'debrief.json')
+        if p.is_file() and not p.is_symlink():report_stamp=p.stat().st_mtime
+    activity='Waiting for the next mission step';activity_at=state.get('phase_started_at',0)
+    for e in reversed(getattr(harness,'events',[])):
+        if e.get('kind') not in ('tool','assistant','activity'):continue
+        if e.get('at',0)<state.get('phase_started_at',0):break
+        activity_at=e.get('at',activity_at)
+        text=e.get('text','')
+        if e.get('kind')=='tool':
+            if 'controller.rom' in text:activity='Working on the rover ROM'
+            elif 'map.json' in text:activity='Reading or updating the map'
+            elif 'analysis-' in text or 'observations/' in text:activity='Studying returned sensor data'
+            elif 'live.json' in text or 'supervisor.json' in text:activity='Publishing a short update'
+            else:activity='Working in the mission workspace'
+        else:activity='Opus is working on this turn'
+        break
     mapped=safe_map(map_value);revision=hashlib.sha256(json.dumps(mapped,sort_keys=True).encode()).hexdigest()[:12]
     report_sortie=brief.get('observed_sortie') if isinstance(brief,dict) else debrief.get('observed_sortie') if isinstance(debrief,dict) else None
     packet=hashlib.sha256(json.dumps([report_sortie,reports],sort_keys=True).encode()).hexdigest()[:12]
-    return {'run_id':state.get('run_id'),'phase':state['phase'],'active':state['active'],'sortie':state.get('sortie',0),'hardware_profile':state.get('config',{}).get('sensorModel'),'map':mapped,'map_revision':revision,'updated_at':stamp,'map_updated_at':map_stamp,'reports':reports,'report_packet':packet,'report_source':source,'report_sortie':report_sortie,'last_returned_estimate':returned}
+    frame=state.get('frame')or{};readings=frame.get('readings')or{}
+    sonar={k:readings[k] for k in ('pan','range','range_valid','range_angle','range_age','range_seq','light','safety_due','safe_dwell','dock') if type(readings.get(k)) in (int,float) and math.isfinite(readings[k])}
+    sonar.update(phase=state['phase'],pan_span=(state.get('config')or{}).get('panSpan',90),beam=(state.get('config')or{}).get('beam',15),source='human observer only; not sent to Opus')
+    return {'sonar':sonar,'objective_count':state.get('objective_count'),'confirmed_count':len(frame.get('found',[])) if state.get('phase')!='deployed' else (inbox or {}).get('confirmed_count',0),'until_done':state.get('until_done',False),'report_updated_at':report_stamp,'live_report':live,'live_updated_at':live_stamp,'phase_started_at':state.get('phase_started_at',0),'activity':activity,'activity_at':activity_at,'mission_seconds_limit':state.get('mission_seconds_limit'),'mission_seconds_used':state.get('mission_seconds_used',0),'run_id':state.get('run_id'),'phase':state['phase'],'active':state['active'],'sortie':state.get('sortie',0),'hardware_profile':state.get('config',{}).get('sensorModel'),'map':mapped,'map_revision':revision,'updated_at':stamp,'map_updated_at':map_stamp,'reports':reports,'report_packet':packet,'report_source':source,'report_sortie':report_sortie,'last_returned_estimate':returned}

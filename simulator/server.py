@@ -45,13 +45,14 @@ def validate_map(m):
     if not isinstance(objects,list) or len(objects)>100:raise ValueError('Invalid desk objects')
     identities=set()
     for obj in objects:
-        if not position(obj) or obj.get('type') not in ('laptop','bottle','hidebox','shade') or not isinstance(obj.get('id'),str) or not obj['id'] or obj['id'] in identities or not all(isinstance(obj.get(k),(int,float)) and not isinstance(obj[k],bool) and math.isfinite(obj[k]) and obj[k]>0 for k in ('w','h')) or obj['x']+obj['w']>250 or obj['y']+obj['h']>100:raise ValueError('Invalid desk object geometry or identity')
+        if not position(obj) or obj.get('type') not in ('laptop','bottle','hidebox','shade','plant') or not isinstance(obj.get('id'),str) or not obj['id'] or obj['id'] in identities or not all(isinstance(obj.get(k),(int,float)) and not isinstance(obj[k],bool) and math.isfinite(obj[k]) and obj[k]>0 for k in ('w','h')) or obj['x']+obj['w']>250 or obj['y']+obj['h']>100:raise ValueError('Invalid desk object geometry or identity')
+        if obj.get('opening','left') not in ('left','right'):raise ValueError('Invalid shelter opening')
         identities.add(obj['id'])
     return copy.deepcopy(m)
 
 def hardware(config):
-    limits={'range':(5,500),'rangeMin':(.5,10),'noise':(0,30),'panSpan':(20,180),'panSpeed':(10,180),'beam':(1,45),'pingHz':(1,10),'lightLevel':(0,1),'lightNoise':(0,.2),'coverLeak':(0,1),'speed':(1,150),'turn':(10,360),'battery':(10,1000),'fov':(10,150),'vision':(20,600),'ram':(4,520000),'budget':(1,512),'seed':(0,999999)}
-    defaults={'range':80,'rangeMin':2,'noise':.4,'panSpan':90,'panSpeed':90,'beam':15,'pingHz':5,'lightLevel':1,'lightNoise':.02,'coverLeak':.08,'speed':12,'turn':90,'battery':240,'fov':65,'vision':120,'ram':64,'budget':32,'seed':42}
+    limits={'range':(5,500),'rangeMin':(.5,10),'noise':(0,30),'panSpan':(20,180),'panSpeed':(10,180),'beam':(1,45),'pingHz':(1,10),'lightLevel':(0,1),'lightNoise':(0,.2),'coverLeak':(0,1),'speed':(1,150),'turn':(10,360),'battery':(10,1000),'fov':(10,150),'vision':(20,600),'ram':(4,520000),'budget':(1,512),'seed':(0,999999),'bleContact':(-70,-10),'bleNoise':(0,12),'bleDrop':(0,1),'bleMultipath':(0,12)}
+    defaults={'range':80,'rangeMin':2,'noise':.4,'panSpan':90,'panSpeed':90,'beam':15,'pingHz':5,'lightLevel':1,'lightNoise':.02,'coverLeak':.08,'speed':12,'turn':90,'battery':240,'fov':65,'vision':120,'ram':64,'budget':32,'seed':42,'bleContact':-35,'bleNoise':2,'bleDrop':.08,'bleMultipath':3}
     c={k:config.get(k,default) for k,default in defaults.items()}
     for k,(low,high) in limits.items():
         if isinstance(c[k],bool) or not isinstance(c[k],(int,float)) or not math.isfinite(c[k]) or not low<=c[k]<=high:raise ValueError('Invalid hardware setting: '+k)
@@ -60,7 +61,8 @@ def hardware(config):
     if c['rangeMin']>=c['range']:raise ValueError('Minimum range must be below maximum range')
     c['sensorModel']=config.get('sensorModel',PROFILE)
     if c['sensorModel'] not in (PROFILE,LEGACY_PROFILE):raise ValueError('Unknown hardware profile')
-    c['camera']=bool(config.get('camera',False));c['bumpers']=bool(config.get('bumpers',False));c['virtualRescue']=bool(config.get('virtualRescue',False))
+    c['ble']=bool(config.get('ble',True));c['camera']=bool(config.get('camera',False));c['bumpers']=bool(config.get('bumpers',False));c['virtualRescue']=bool(config.get('virtualRescue',False))
+    if c['ble']:c['virtualRescue']=False
     return c
 
 def legacy_hardware(c):
@@ -68,7 +70,26 @@ def legacy_hardware(c):
 
 def public_hardware(c):
     if c.get('sensorModel')==LEGACY_PROFILE:return {**legacy_hardware(c),'sensor_model':LEGACY_PROFILE,'schema_version':1}
-    return {**legacy_hardware(c),'schema_version':2,'collision_radius_cm':7.5,'sensor_model':PROFILE,'camera':c['camera'],'bumper_sensor':c['bumpers'],'virtual_rescue_detector':c['virtualRescue'],'range_min_cm':c['rangeMin'],'range_beam_deg':c['beam'],'range_sample_hz':c['pingHz'],'range_sensor_mount':{'pivot_forward_cm':4.3,'transducer_forward_cm':2.5,'height_cm':2.4,'channels':1,'pan_span_deg':c['panSpan'],'pan_speed_deg_s':c['panSpeed'],'control':'pan DEG holds an angle; sweep DEG_PER_SEC oscillates, sweep 0 holds current angle'},'light_sensor':{'position':'upward-facing on top of chassis','reading':'normalized 0..1, not lux or an oracle hidden flag','ambient_level':c['lightLevel'],'noise':c['lightNoise'],'box_light_leak':c['coverLeak']},'calibration_status':'Range, blind zone, beam width, servo speed, sensor dimensions, motion and light response are provisional simulator assumptions, NOT verified hardware specifications.','mission':'Explore and map using one steerable ultrasonic channel; find possible shelter using light changes and local geometry, verify with multiple samples and dwell, then return with evidence. Darkness alone does not prove concealment. RGB, bumpers and virtual rescue detection are absent unless explicitly enabled.','edge_sensing':'Horizontal sonar cannot sense tabletop drop-offs. Simulator edge guard blocks falls without emitting a range echo; do not assume a measured boundary wall.'}
+    return {**legacy_hardware(c),'safety_rule':{'interval_seconds':30,'light_max':.30,'continuous_dwell_seconds':2,'alternative':'dock contact','failure':'stop; no upload away from dock'},'ble':{'enabled':c.get('ble',False),'receiver':'Bluefruit LE Sniffer P2269, simulated packet/RSSI interface; onboard USB-host integration unverified','contact_reference_dbm':c.get('bleContact',-35),'reference_antenna_distance_cm':2,'path_loss_exponent':2,'noise_uniform_db':c.get('bleNoise',2),'multipath_amplitude_db':c.get('bleMultipath',3),'packet_drop_probability':c.get('bleDrop',.08),'receiver_floor_dbm':-95,'scheduled_packets_hz':5,'antenna_forward_cm':6.8,'antenna':'fixed chassis front; mounting assumed','confirmation':'3 fresh packets for one ID spanning >=1 second, gap <=1.5 seconds, RSSI >= contact reference minus 2 dB; operational proximity only','discovery':'only received target advertisements; no target count, bearing or exact distance','calibration':'all RF parameters provisional; known contact reference stands in for user calibration'},'schema_version':3,'collision_radius_cm':7.5,'sensor_model':PROFILE,'camera':c['camera'],'bumper_sensor':c['bumpers'],'virtual_rescue_detector':c['virtualRescue'],'range_min_cm':c['rangeMin'],'range_beam_deg':c['beam'],'range_sample_hz':c['pingHz'],'range_sensor_mount':{'pivot_forward_cm':4.3,'transducer_forward_cm':2.5,'height_cm':2.4,'channels':1,'pan_span_deg':c['panSpan'],'pan_speed_deg_s':c['panSpeed'],'control':'pan DEG holds an angle; sweep DEG_PER_SEC oscillates, sweep 0 holds current angle'},'light_sensor':{'position':'upward-facing on top of chassis','reading':'normalized 0..1, not lux or an oracle hidden flag','ambient_level':c['lightLevel'],'noise':c['lightNoise'],'box_light_leak':c['coverLeak']},'calibration_status':'RF attenuation, RSSI/contact calibration, antenna mounting, range, blind zone, beam width, servo speed, sensor dimensions, motion and light response are provisional simulator assumptions, NOT verified hardware specifications.','mission':'Find BLE-emitting objectives using noisy per-packet RSSI when enabled; map with one steerable ultrasonic channel; find possible shelter using light changes and local geometry, verify with multiple samples and dwell, then return with evidence. Darkness alone does not prove concealment. RGB, bumpers and virtual rescue detection are absent unless explicitly enabled.','edge_sensing':'Horizontal sonar cannot sense tabletop drop-offs. Simulator edge guard blocks falls without emitting a range echo; do not assume a measured boundary wall.'}
+
+def mission_hardware(c,count,budget=None,until_done=False):
+    return {**public_hardware(c),'objective_count':count,'run_until_complete':until_done,'mission_budget':{'limit_seconds':budget,'clock':'cumulative deployed simulated rover time; planning at base excluded','goal':'Confirm all '+str(count)+' objectives and return to the dock. Positions are unknown.','sortie_deadline':False if until_done else 'mission.json max_seconds'}}
+
+def verify_shelter_evidence(belief,agent):
+    for shelter in belief.get('shelters',[]):
+        if shelter.get('shelter_status')!='verified':continue
+        matched=False
+        for reference in shelter.get('evidence',[]):
+            name=re.search(r'observations/sortie-\d+\.json',str(reference))
+            if not name:continue
+            path=agent/name.group(0)
+            try:log=json.loads(read_agent(path))
+            except (OSError,ValueError):continue
+            evidence=[row.get('readings',{}) for row in log.get('samples',[])]+[{'odom_x':c.get('odom_x'),'odom_y':c.get('odom_y'),'light':c.get('light'),'safe_dwell':c.get('dwell'),'dock':c.get('dock')} for c in log.get('safety_checks',[])]
+            for r in evidence:
+                if all(type(r.get(k)) in (int,float) for k in ('odom_x','odom_y','light','safe_dwell')) and not r.get('dock') and r['light']<=.3 and r['safe_dwell']>=2-1e-6 and math.hypot(r['odom_x']-shelter['x'],r['odom_y']-shelter['y'])<=15:matched=True;break
+            if matched:break
+        if not matched:raise ValueError('Verified shelter lacks delivered low-light dwell evidence near its estimated position. Keep it candidate or stale until measured.')
 
 def read_agent(path, limit=262144):
     if path.is_symlink() or not path.is_file() or path.stat().st_size > limit:
@@ -110,7 +131,7 @@ class Harness:
             if self.run:
                 with (self.run/'events.jsonl').open('a') as f:f.write(json.dumps(event)+'\n')
     def phase(self,phase,message):
-        with self.lock:self.state.update(phase=phase,message=message)
+        with self.lock:self.state.update(phase=phase,message=message,phase_started_at=time.time())
         self.event('harness',message,phase=phase);self.persist()
     def persist(self):
         with self.lock:
@@ -122,25 +143,32 @@ class Harness:
             world=validate_map(body.get('map'));c=hardware(body.get('config',{}));node_validate('yield',int(c['ram']),world,c['sensorModel'])
             rounds=int(body.get('rounds',8));speed=float(body.get('speed',8))
             if not 1<=rounds<=50 or not 1<=speed<=100:raise ValueError('Use 1–50 sorties and 1–100× speed')
+            until_done=bool(body.get('until_done',False))
+            budget=body.get('mission_seconds')
+            if until_done and budget is not None:raise ValueError('Until-complete missions cannot have a time budget')
+            if until_done and not world['targets']:raise ValueError('Add at least one objective')
+            if budget is not None and (type(budget) not in (int,float) or not math.isfinite(budget) or not 5<=budget<=3600):raise ValueError('Mission budget must be 5–3600 simulated seconds')
             run_id=time.strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:6]
             self.run=RUNTIME/run_id;self.run.mkdir(parents=True)
             self.agent=WORKSPACES/run_id/'agent';self.agent.mkdir(parents=True)
             (self.agent/'observations').mkdir()
-            (self.agent/'hardware.json').write_text(json.dumps(public_hardware(c),indent=2))
-            (self.agent/'inbox.json').write_text(json.dumps({'kind':'initial','observation_files':[],'message':'No environmental observations have been delivered. Design your first short returnable sortie.'},indent=2))
+            (self.agent/'hardware.json').write_text(json.dumps(mission_hardware(c,len(world['targets']),budget,until_done),indent=2))
+            (self.agent/'inbox.json').write_text(json.dumps({'kind':'initial','observation_files':[],'objective_count':len(world['targets']),'confirmed_count':0,'until_done':until_done,'mission_seconds_remaining':budget,'mission_seconds_used':0,'message':'No environmental observations have been delivered. Design your first short returnable sortie. Mission clock, if configured, spans ALL sorties; planning at base is excluded.'},indent=2))
             (self.agent/'controller.rom').write_text('; Write your first controller. Commands persist.\nmove 0\nyield\njmp 0\n')
             (self.agent/'mission.json').write_text(json.dumps({'action':'deploy','max_seconds':30,'summary':'Awaiting Opus first design.'},indent=2))
-            (self.agent/'map.json').write_text(json.dumps({'frame':'dock-relative-cm','occupied':[],'free':[],'landmarks':[],'notes':'Unknown. No observations yet.'},indent=2))
+            (self.agent/'map.json').write_text(json.dumps({'frame':'dock-relative-cm','occupied':[],'free':[],'landmarks':[],'shelters':[],'notes':'Unknown. No observations yet.'},indent=2))
             (self.agent/'notes.md').write_text('No observations yet. The environment is unknown.\n')
             self.cancel.clear();self.events=[];self.event_id=0
-            self.state={'active':True,'phase':'planning','run_id':run_id,'sortie':0,'message':'Starting Opus from an empty map.','frame':None,'world':world,'config':c,'turns':[],'workspace_path':str(self.agent),'max_rounds':rounds,'speed':speed,'model':'opus'}
+            self.state={'active':True,'phase':'planning','run_id':run_id,'sortie':0,'message':'Starting Opus from an empty map.','frame':None,'world':world,'config':c,'turns':[],'workspace_path':str(self.agent),'until_done':until_done,'objective_count':len(world['targets']),'max_rounds':None if until_done else rounds,'speed':speed,'model':'opus','mission_seconds_limit':budget,'mission_seconds_used':0}
             self.thread=threading.Thread(target=self.loop,args=(world,c,rounds,speed),daemon=True);self.persist();self.thread.start()
             return self.snapshot()
     def resume(self,body):
         with self.lock:
             if self.state['active']:raise ValueError('An experiment is already active')
             if self.state.get('config',{}).get('sensorModel',LEGACY_PROFILE)==LEGACY_PROFILE:raise ValueError('This archive uses legacy fixed sensors. Replay it, but start a new experiment for the photo-based hardware.')
+            if not self.state.get('config',{}).get('ble'):raise ValueError('Pre-BLE experiments are replay-only. Start a fresh BLE experiment.')
             if not self.agent or not self.run or not self.state.get('world'):raise ValueError('No saved experiment')
+            if self.mission_remaining() is not None and self.mission_remaining()<=0:raise ValueError('Mission time budget exhausted; start a new experiment')
             frame=self.state.get('frame')
             if self.state['phase']=='stranded' or frame and not frame.get('readings',{}).get('dock'):
                 raise ValueError('The rover is not at the dock. Its undelivered data cannot be recovered.')
@@ -154,11 +182,12 @@ class Harness:
                 if record.get('result')=='docked' and record.get('upload'):
                     number=record['upload']['sortie'];name=f'observations/sortie-{number:03d}.json'
                     (self.agent/name).write_text(json.dumps(record['upload'],indent=2));delivered.append(name)
-            (self.agent/'hardware.json').write_text(json.dumps(public_hardware(c),indent=2))
+            (self.agent/'hardware.json').write_text(json.dumps(mission_hardware(c,len(self.state['world']['targets']),self.state.get('mission_seconds_limit'),self.state.get('until_done',False)),indent=2))
             inbox={'kind':'dock_return','latest_observation':delivered[-1],'observation_files':delivered,'message':'Continuing from a physically docked state with the existing workspace. No additional environmental observations were supplied.'} if delivered else {'kind':'initial','observation_files':[],'message':'Continuing initial planning. No environmental observations have been supplied.'}
+            inbox.update(mission_seconds_remaining=self.mission_remaining(),mission_seconds_used=self.state.get('mission_seconds_used',0),objective_count=len(self.state['world']['targets']),confirmed_count=len((self.state.get('frame') or {}).get('found',[])),until_done=self.state.get('until_done',False))
             (self.agent/'inbox.json').write_text(json.dumps(inbox,indent=2))
             start_turn=max((int(p.stem.split('-')[-1]) for p in self.run.glob('deployment-*.json')),default=0)+1
-            self.cancel.clear();self.state.update(active=True,phase='planning',message='Continuing the existing docked workspace.',max_rounds=start_turn+rounds-1,speed=speed)
+            self.cancel.clear();self.state.update(active=True,phase='planning',message='Continuing the existing docked workspace.',max_rounds=None if self.state.get('until_done') else start_turn+rounds-1,speed=speed)
             self.thread=threading.Thread(target=self.loop,args=(self.state['world'],c,rounds,speed,start_turn),daemon=True)
             self.persist();self.thread.start();return self.snapshot()
     def update_environment(self,body):
@@ -189,18 +218,11 @@ class Harness:
         if self.cancel.is_set():raise InterruptedError('Experiment stopped')
         p=subprocess.Popen(args,start_new_session=True,**kw)
         with self.lock:self.process=p
-        # A watchdog avoids waiting forever on a network/tool stall.
-        def watchdog():
-            if self.cancel.wait(600):return
-            if p.poll() is None:
-                try:os.killpg(p.pid,signal.SIGTERM)
-                except ProcessLookupError:pass
-        threading.Thread(target=watchdog,daemon=True).start()
         return p
     def watch_workspace(self,process,agent,turn):
         seen={}
         while process.poll() is None and not self.cancel.is_set():
-            for name in ('map.json','notes.md','controller.rom','debrief.json','supervisor.json'):
+            for name in ('map.json','notes.md','controller.rom','debrief.json','supervisor.json','live.json'):
                 try:
                     content=read_agent(agent/name);digest=hashlib.sha256(content.encode()).hexdigest()
                     if seen.get(name)==digest:continue
@@ -252,12 +274,12 @@ class Harness:
         try:prior_map=json.loads(read_agent(self.agent/'map.json'))
         except (ValueError,OSError):prior_map={}
         self.phase('reviewing' if review_only else 'planning',f'Opus turn {turn}: '+('reviewing the last return without deploying.' if review_only else 'reading only its workspace and dock-delivered evidence.'))
-        args=[CLAUDE,'-p','--model','opus','--effort','high','--restricted','--safe-mode','--no-chrome','--disable-slash-commands','--setting-sources','','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--tools','Read,Write,Edit,Glob,Grep','--allowedTools','Read,Write,Edit,Glob,Grep','--permission-mode','dontAsk','--no-session-persistence','--output-format','stream-json','--include-partial-messages','--verbose','--system-prompt',(ROOT/'legacy/opus-contract-v1.txt').read_text() if self.state['config'].get('sensorModel')==LEGACY_PROFILE else CONTRACT]
-        prompt=f'Automatic dock turn {turn}. Read inbox.json and hardware.json, and validation.txt if present; inspect your existing workspace and delivered observations, then update controller.rom, mission.json, map.json, notes.md, debrief.json and supervisor.json. Publish a concise evidence/decision summary. Finish this turn after writing the files; the harness will validate and deploy them.'
+        args=[CLAUDE,'-p','--model','opus','--effort','medium','--restricted','--safe-mode','--no-chrome','--disable-slash-commands','--setting-sources','','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--tools','Read,Write,Edit,Glob,Grep','--allowedTools','Read,Write,Edit,Glob,Grep','--permission-mode','dontAsk','--no-session-persistence','--output-format','stream-json','--include-partial-messages','--verbose','--system-prompt',(ROOT/'legacy/opus-contract-v1.txt').read_text() if self.state['config'].get('sensorModel')==LEGACY_PROFILE else CONTRACT]
+        prompt=f'Automatic dock turn {turn}. Read inbox.json and hardware.json, and validation.txt if present; inspect your existing workspace and delivered observations, then update controller.rom, mission.json, map.json, notes.md, debrief.json and supervisor.json. Publish live.json immediately with one short public progress sentence, then refresh it after discoveries or plan changes while working. This is an evidence/action summary, not private reasoning. Publish a concise evidence/decision summary. Finish this turn after writing the files; the harness will validate and deploy them.'
         if review_only:prompt+=' This is REVIEW ONLY at the dock. Analyze the last delivered log and prepare an evidence-backed debrief and next ROM/plan. Nothing will be deployed during this call.'
         stderr_path=self.run/f'claude-{turn:03d}.stderr.log'
         streamed=False;result=None
-        with stderr_path.open('w') as err:
+        with stderr_path.open('a') as err:
             p=self.launch(args,cwd=self.agent,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=err,text=True,bufsize=1,env={**os.environ,'CLAUDE_CODE_DISABLE_AUTO_MEMORY':'1'})
             threading.Thread(target=self.analysis_loop,args=(p,self.agent,turn),daemon=True).start()
             threading.Thread(target=self.watch_workspace,args=(p,self.agent,turn),daemon=True).start()
@@ -288,7 +310,7 @@ class Harness:
                             content=block.get('content','');text=content if isinstance(content,str) else json.dumps(content)
                             self.event('tool_result',text[:12000],turn=turn)
                 elif kind=='result':result=e
-            code=p.wait(timeout=15)
+            code=p.wait();p.stdout.close()
         if self.cancel.is_set():raise InterruptedError('Experiment stopped')
         if code or not result or result.get('is_error'):
             detail=(result or {}).get('result') or stderr_path.read_text()[-1500:] or f'Claude exited {code} without a successful result'
@@ -296,6 +318,7 @@ class Harness:
         if self.protected()!=before:raise RuntimeError('Agent modified an immutable hardware/inbox/observation file; deployment blocked.')
         mission=json.loads(read_agent(self.agent/'mission.json'));rom=read_agent(self.agent/'controller.rom',65536)
         if mission.get('action') not in ('deploy','finish'):raise ValueError('mission.json action must be deploy or finish')
+        if mission['action']=='finish' and self.state.get('until_done') and len((self.state.get('frame')or{}).get('found',[]))<self.state['objective_count']:raise ValueError('Mission incomplete: continue deploying until all known objectives are confirmed and returned to base.')
         if mission['action']=='deploy':
             seconds=mission.get('max_seconds',60)
             if isinstance(seconds,bool) or not isinstance(seconds,(int,float)) or not math.isfinite(seconds) or not 5<=seconds<=180:raise ValueError('max_seconds must be 5–180')
@@ -305,7 +328,7 @@ class Harness:
         validate_debrief(debrief,expected)
         if self.state['config'].get('sensorModel')!=LEGACY_PROFILE:
             supervisor.validate_brief(json.loads(read_agent(self.agent/'supervisor.json')),expected)
-            supervisor.validate_belief(json.loads(read_agent(self.agent/'map.json')),expected or 0,prior_map)
+            belief=json.loads(read_agent(self.agent/'map.json'));supervisor.validate_belief(belief,expected or 0,prior_map);verify_shelter_evidence(belief,self.agent)
         archive=self.run/f'turn-{turn:03d}';archive.mkdir(exist_ok=True)
         for name in ('mission.json','controller.rom','map.json','notes.md','debrief.json','supervisor.json'):
             path=self.agent/name
@@ -316,11 +339,23 @@ class Harness:
             self.state['turns'].append({'turn':turn,'summary':summary,'action':mission['action'],'at':time.time(),'review_only':review_only})
         self.event('decision',summary,turn=turn)
         return mission,rom
+    def mission_remaining(self):
+        limit=self.state.get('mission_seconds_limit')
+        return None if limit is None else max(0,round(limit-self.state.get('mission_seconds_used',0),2))
+    def final_review(self,turn):
+        for attempt in range(3):
+            try:self.plan(turn,review_only=True);return
+            except ValueError as e:
+                if attempt==2:raise
+                (self.agent/'validation.txt').write_text('Review output validation failed; no new environment data exists. '+str(e))
     def sortie(self,world,c,number,speed,mission,rom,found):
         with self.lock:self.state['deployed_rom']=rom
         self.phase('deployed',f'Sortie {number}: rover disconnected. Opus is idle until physical docking.')
         self.persist()
-        job={'map':world,'config':c,'sortie':number,'speed':speed,'max_seconds':mission['max_seconds'],'rom':rom,'found':found}
+        job={'map':world,'config':c,'sortie':number,'speed':speed,'max_seconds':mission['max_seconds'],'rom':rom,'found':found,'until_done':self.state.get('until_done',False)}
+        elapsed=self.state.get('mission_seconds_used',0);remaining=self.mission_remaining()
+        if remaining is not None:
+            job.update(mission_remaining=remaining,mission_elapsed=elapsed);job['max_seconds']=min(job['max_seconds'],remaining)
         (self.run/f'deployment-{number:03d}.json').write_text(json.dumps(job))
         with (self.run/f'rover-{number:03d}.stderr.log').open('w') as err:
             p=self.launch([NODE,node_path(ROOT/'sortie.mjs')],cwd=ROOT,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=err,text=True,bufsize=1)
@@ -329,18 +364,26 @@ class Harness:
                 if self.cancel.is_set():break
                 event=json.loads(line)
                 if event['type']=='frame':
-                    with self.lock:self.state['frame']=event['state']
+                    with self.lock:
+                        self.state['frame']=event['state']
+                        self.state['mission_seconds_used']=round(elapsed+event['state']['t'],2)
                 elif event['type']=='end':end=event
-            p.wait(timeout=10)
+            p.wait(timeout=10);p.stdout.close()
         if self.cancel.is_set():raise InterruptedError('Experiment stopped')
         if not end:raise RuntimeError('Rover worker ended without a result')
-        with self.lock:self.state['frame']=end['state']
+        with self.lock:
+            self.state['frame']=end['state']
+            self.state['mission_seconds_used']=round(elapsed+end['state']['t'],2)
         (self.run/f'return-{number:03d}.json').write_text(json.dumps(end))
         return end
     def loop(self,world,c,rounds,speed,start_turn=1):
         found=list((self.state.get('frame') or {}).get('found',[])) if start_turn>1 else [];delivered=[str(p.relative_to(self.agent)) for p in sorted((self.agent/'observations').glob('*.json'))]
         try:
-            for turn in range(start_turn,start_turn+rounds):
+            turn=start_turn
+            while self.state.get('until_done') or turn<start_turn+rounds:
+                if self.cancel.is_set():raise InterruptedError('Experiment stopped')
+                if self.mission_remaining() is not None and self.mission_remaining()<=0:
+                    self.phase('time_limit','Shared mission time budget exhausted; no further deployment.');break
                 with self.lock:self.state['sortie']=turn
                 for attempt in range(3):
                     try:
@@ -355,18 +398,22 @@ class Harness:
                 with self.lock:current_world=copy.deepcopy(self.state.get('world',world))
                 result=self.sortie(current_world,c,turn,speed,mission,rom,found)
                 if result['result']!='docked':
-                    self.phase('stranded',f'Sortie {turn}: {result["result"]}. No observations uploaded; Opus has not seen this outing.');break
+                    self.phase('time_limit' if result['result']=='mission_timeout' else 'stranded',f'Sortie {turn}: {result["result"]}. No observations uploaded; Opus has not seen this outing.');break
                 self.phase('downloading',f'Physical dock connection: downloading sortie {turn} observations and recharging.')
                 name=f'observations/sortie-{turn:03d}.json';(self.agent/name).write_text(json.dumps(result['upload'],indent=2));delivered.append(name);found=result['state']['found']
-                (self.agent/'inbox.json').write_text(json.dumps({'kind':'dock_return','latest_observation':name,'observation_files':delivered,'message':'Rover has physically docked, log uploaded, battery recharged, departure orientation restored. Review the new data and decide the next move.'},indent=2))
+                (self.agent/'inbox.json').write_text(json.dumps({'kind':'dock_return','latest_observation':name,'observation_files':delivered,'objective_count':len(current_world['targets']),'confirmed_count':len(found),'until_done':self.state.get('until_done',False),'mission_seconds_remaining':self.mission_remaining(),'mission_seconds_used':self.state.get('mission_seconds_used',0),'message':'Rover has physically docked, log uploaded, battery recharged, departure orientation restored. Review the new data and decide the next move.'},indent=2))
                 self.event('download',f'{name}: {len(result["upload"]["samples"])} samples, {result["upload"]["logger"]["dropped_samples"]} overwritten.')
-                self.persist();self.cancel.wait(.7)
+                self.persist()
+                complete=bool(current_world.get('targets')) and len(set(found))==len(current_world['targets'])
+                expired=self.mission_remaining() is not None and self.mission_remaining()<=0
+                if complete or expired:
+                    self.final_review(turn+1)
+                    self.phase('rescued' if complete else 'time_limit','All objectives confirmed and rover returned within the mission budget.' if complete else 'Mission budget exhausted at the dock. Final review archived; no more sorties.')
+                    break
+                self.cancel.wait(.7)
+                turn+=1
             else:
-                for attempt in range(3):
-                    try:self.plan(turn+1,review_only=True);break
-                    except ValueError as e:
-                        if attempt==2:raise
-                        (self.agent/'validation.txt').write_text('Review output validation failed; no new environment data exists. '+str(e))
+                self.final_review(turn)
                 self.phase('limit','Sortie limit reached at the dock. Final debrief and next plan archived; no further deployments scheduled.')
         except InterruptedError:self.phase('stopped','Experiment stopped. No undocked data delivered.')
         except Exception as e:self.phase('error',str(e));self.event('error',str(e))

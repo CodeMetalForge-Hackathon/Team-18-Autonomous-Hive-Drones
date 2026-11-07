@@ -24,6 +24,21 @@ class SupervisorTests(unittest.TestCase):
                 agent=root
                 def snapshot(self):return {'run_id':'test','phase':'planning','active':True,'sortie':2,'world':{'SECRET_TRUE_MAP':99999},'frame':{'robot':{'x':98765,'y':87654}},'config':{'sensorModel':server.PROFILE}}
             data=supervisor.projection(H());self.assertNotIn('world',data);self.assertNotIn('frame',data);self.assertNotIn('SECRET_TRUE_MAP',json.dumps(data));self.assertNotIn('98765',json.dumps(data));self.assertEqual(data['last_returned_estimate']['x'],5);self.assertEqual(data['reports'],BRIEF['reports']);self.assertEqual(data['report_source'],'opus')
+    def test_live_public_report_is_bounded_and_filters_extra_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=pathlib.Path(tmp);p=root/'live.json';p.write_text(json.dumps({'kind':'plan','text':'Check the new opening, then return to base.','confidence':'uncertain','private':'DO NOT DISPLAY'}))
+            class H:
+                agent=root
+                events=[{'kind':'tool','at':3,'text':'Write controller.rom private-path'}]
+                def snapshot(self):return {'phase':'planning','active':True,'phase_started_at':2,'mission_seconds_limit':300,'mission_seconds_used':64.9}
+            result=supervisor.projection(H());self.assertEqual(result['live_report']['kind'],'plan');self.assertNotIn('DO NOT DISPLAY',json.dumps(result));self.assertEqual(result['activity'],'Working on the rover ROM');self.assertEqual(result['mission_seconds_used'],64.9)
+            for bad in [{'kind':'thinking','text':'secret'},{'kind':'plan','text':'x'*73},{'kind':'learned','text':'bad\nline'}]:
+                p.write_text(json.dumps(bad));self.assertIsNone(supervisor.projection(H())['live_report'])
+    def test_sonar_is_observer_only_without_world_coordinates(self):
+        class H:
+            agent=None
+            def snapshot(self):return {'phase':'deployed','active':True,'config':{},'frame':{'robot':{'x':99999},'readings':{'pan':-30,'range':25,'range_valid':1,'range_angle':-27,'light':.12,'safety_due':9}}}
+        data=supervisor.projection(H());self.assertEqual(data['sonar']['pan'],-30);self.assertEqual(data['sonar']['light'],.12);self.assertNotIn('99999',json.dumps(data));self.assertNotIn('robot',data['sonar'])
     def test_revision_tracks_agent_map_changes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=pathlib.Path(tmp);p=root/'map.json';p.write_text(json.dumps({'occupied':[{'x':10,'y':0}]}))

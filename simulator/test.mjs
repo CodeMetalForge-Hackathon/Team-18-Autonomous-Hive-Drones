@@ -19,3 +19,33 @@ const shadeMap=structuredClone(empty);addObject(shadeMap,'shade',90,40);const sh
 const targetMap={...empty,targets:[{x:108,y:50}]};const noDetector=new Sim(targetMap,config,'yield');noDetector.step();assert.equal(noDetector.found.size,0);assert.equal(noDetector.readings.target,0);const virtual=new Sim(targetMap,{...config,virtualRescue:true,camera:true},'yield');virtual.step();assert.equal(virtual.status,'Complete');
 const legacy=new Sim(wall,{sensorModel:LEGACY_PROFILE,noise:0},'sense r0 front\nyield');assert.equal(legacy.readings.front,50);assert.equal(legacy.readings.range,undefined);
 console.log('Photo hardware checks passed: one cone, finite servo slew, repeated sweep reversal, hold, timestamped ping pose, unknown echoes/blind zone, invisible table edges, low laptop bases, light/shade ambiguity, disabled fictional sensors, and explicit legacy profile.');
+
+const exposed=new Sim(empty,config,'yield');exposed.robot.x+=20;for(let i=0;i<300;i++)exposed.step();assert.equal(exposed.status,'Safety violation');assert.equal(exposed.safetyChecks[0].time,30);
+const base=new Sim(empty,config,'yield');for(let i=0;i<610;i++)base.step();assert.equal(base.safetyChecks.length,2);assert.ok(base.safetyChecks.every(c=>c.safe&&c.dock));
+const sheltered=new Sim(shadeMap,config,'yield');sheltered.robot.x+=7;for(let i=0;i<300;i++)sheltered.step();assert.equal(sheltered.safetyChecks[0].safe,true);sheltered.robot.x=150;sheltered.step();assert.equal(sheltered.readings.safe_dwell,0);
+const pots=structuredClone(empty);addObject(pots,'plant',130,45);const pot=new Sim(pots,config,'yield');assert.equal(pot.readings.range_valid,1);assert.ok(pot.blocked(135,50));
+console.log('Safety deadlines, base contact, low-light dwell/reset and plant echoes passed.');
+// The refreshed challenge must not contain an objective isolated by the rover footprint.
+const challenge=arena(),probe=new Sim(challenge,{},'yield'),queue=[[18,50]],visited=new Set(['18,50']);
+for(let i=0;i<queue.length;i++){const [x,y]=queue[i];for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){const a=x+dx,b=y+dy,key=a+','+b;if(a<0||a>250||b<0||b>100||visited.has(key)||probe.blocked(a,b))continue;visited.add(key);queue.push([a,b]);}}
+assert.ok(challenge.targets.every(p=>visited.has(p.x+','+p.y)),'Every objective has a collision-free route from dock');
+// BLE exposes noisy packets, never true range/bearing, and uses evidence-only confirmation.
+const radio={...config,ble:true,bleNoise:0,bleDrop:0,bleMultipath:0,missionMode:true};
+const beaconWorld={...structuredClone(empty),targets:[{x:140,y:50}]};
+const rf=new Sim(beaconWorld,radio,'yield');
+rf.robot.x=113.2;const farPower=rf.blePower(0);rf.robot.x=123.2;const nearPower=rf.blePower(0);assert.ok(Math.abs(nearPower-farPower-20*Math.log10(2))<1e-7);
+const obstructed=structuredClone(beaconWorld);addObject(obstructed,'bottle',128,46.5);const rfBlocked=new Sim(obstructed,radio,'yield');rf.robot.x=100;assert.ok(rfBlocked.blePower(0)<rf.blePower(0)-3.9);
+assert.equal(rf.readings.ble_id,1);assert.equal(rf.readings.ble_channel,37);assert.equal(rf.readings.ble_x,6.8);assert.equal(rf.readings.ble_valid,1);const serial=rf.readings.ble_seq;rf.sense();assert.equal(rf.readings.ble_seq,serial);assert.equal(rf.readings.ble_distance,undefined);assert.equal(rf.readings.ble_bearing,undefined);
+const closeWorld={...structuredClone(empty),targets:[{x:108.8,y:50}]};const closeBLE=new Sim(closeWorld,radio,'yield');for(let i=0;i<9;i++)closeBLE.step();assert.equal(closeBLE.found.size,0);for(let i=0;i<3;i++)closeBLE.step();assert.equal(closeBLE.found.size,1);assert.equal(closeBLE.readings.ble_confirmed,1);
+const missed=new Sim(closeWorld,{...radio,bleDrop:1},'yield');for(let i=0;i<20;i++)missed.step();assert.equal(missed.readings.ble_valid,0);assert.equal(missed.found.size,0);
+closeBLE.c.bleDrop=1;for(let i=0;i<15;i++)closeBLE.step();assert.equal(closeBLE.readings.ble_valid,0);assert.ok(closeBLE.readings.ble_age>1);
+const fading=new Sim(beaconWorld,{...radio,bleMultipath:4},'yield');assert.notEqual(fading.blePower(0,37),fading.blePower(0,38));
+const multi=new Sim({...beaconWorld,targets:[{x:140,y:50},{x:170,y:50},{x:200,y:50}]},radio,'yield');const ids=new Set;for(let i=0;i<8;i++){multi.step();ids.add(multi.readings.ble_id)}assert.equal(ids.size,3);
+const reverse=challenge.objects.find(o=>o.opening==='right');assert.ok(reverse);assert.ok(probe.blocked(reverse.x,reverse.y+reverse.h/2,0.1));assert.equal(probe.blocked(reverse.x+reverse.w,reverse.y+reverse.h/2,0.1),false);
+assert.ok(compile('sense r0 ble_rssi\nsense r1 ble_seq\nsense r2 ble_id\nsense r3 ble_age\nyield').length);
+console.log('BLE checks passed: 6 dB/doubling, obstacle attenuation, channel fading, packet caching/loss/age, identities, sustained RSSI confirmation and reversed shelter geometry.');
+
+const slide=new Sim(empty,config,'yield');for(let i=0;i<10;i++)slide.step({move:0,strafe:1,turn:0});assert.equal(slide.robot.x,100);assert.ok(Math.abs(slide.robot.y-62)<1e-6);assert.equal(slide.robot.a,0);assert.ok(Math.abs(slide.odom.y-12)<.2);
+const diagonal=new Sim(empty,config,'yield');for(let i=0;i<10;i++)diagonal.step({move:1,strafe:1,turn:0});assert.ok(Math.abs(Math.hypot(diagonal.robot.x-100,diagonal.robot.y-50)-12)<1e-6);
+const {auditClearance}=await import('./arena-clearance.mjs');assert.equal(auditClearance(arena()).ok,true);assert.equal(auditClearance(arena()).required_lane_cm,25);
+console.log('Roomy arena and mecanum checks passed: sideways without yaw, normalized diagonal drive, 5 cm side clearance to every objective and shelter.');

@@ -35,6 +35,55 @@ class DockTests(unittest.TestCase):
             self.assertNotIn(secret,serialized)
         self.assertEqual(set(upload['samples'][0]),{'t','readings','commands'})
         self.assertEqual(upload['samples'][-1]['readings']['dock'],1)
+    def test_safety_violation_withholds_log(self):
+        end=worker('move 1\nyield\njmp 0',max_seconds=60)[-1]
+        self.assertEqual(end['result'],'safety_violation')
+        self.assertAlmostEqual(end['state']['t'],30)
+        self.assertIsNone(end['upload'])
+    def test_shared_deadline_stops_worker_and_withholds_log(self):
+        end=worker('move 1\nyield\njmp 0',max_seconds=2.3,mission_remaining=2.3,mission_elapsed=297.7)[-1]
+        self.assertEqual(end['result'],'mission_timeout');self.assertIsNone(end['upload']);self.assertAlmostEqual(end['state']['t'],2.3);self.assertEqual(end['state']['readings']['mission_left'],0)
+    def test_mission_budget_spans_sorties_and_resume(self):
+        calls=[]
+        def planner(h,turn,review_only=False):
+            if not review_only:calls.append(json.loads((h.agent/'inbox.json').read_text())['mission_seconds_remaining'])
+            return {'action':'deploy','max_seconds':5,'summary':'Test deadline'},RETURN_ROM
+        with tempfile.TemporaryDirectory() as tmp:
+            root=pathlib.Path(tmp)
+            with patch.object(server,'WORKSPACES',root/'agents'),patch.object(server,'RUNTIME',root/'runtime'),patch.object(server.Harness,'plan',planner):
+                h=server.Harness();h.start({'map':WORLD,'config':CONFIG,'rounds':1,'speed':100,'mission_seconds':5});h.thread.join(20)
+                used=h.state['mission_seconds_used'];self.assertGreater(used,0);self.assertLess(used,5)
+                h.resume({'rounds':10,'speed':100});h.thread.join(20)
+                self.assertEqual(h.state['phase'],'time_limit');self.assertEqual(h.state['mission_seconds_used'],5)
+                self.assertEqual(calls[0],5);self.assertAlmostEqual(calls[1],5-used);self.assertEqual(json.loads((h.agent/'hardware.json').read_text())['mission_budget']['limit_seconds'],5);self.assertTrue(all(a>b for a,b in zip(calls,calls[1:])))
+                self.assertEqual(len(list((h.agent/'observations').glob('*.json'))),2)
+                last=json.loads(sorted(h.run.glob('deployment-*.json'))[-1].read_text());self.assertLess(last['max_seconds'],5)
+                with self.assertRaises(ValueError):h.resume({'rounds':1})
+    def test_until_complete_ignores_round_cap_and_discloses_count_only(self):
+        calls=[]
+        def planner(h,turn,review_only=False):
+            calls.append((turn,review_only));contract=json.loads((h.agent/'hardware.json').read_text())
+            self.assertEqual(contract['objective_count'],1);self.assertTrue(contract['run_until_complete']);self.assertNotIn('targets',contract);self.assertIsNone(contract['mission_budget']['limit_seconds'])
+            return {'action':'deploy','max_seconds':5,'summary':'Continue'},RETURN_ROM
+        def sortie(h,world,c,number,speed,mission,rom,found):
+            result=[0] if number==4 else [];h.state['frame']={'found':result,'readings':{'dock':1}}
+            return {'result':'docked','state':{'found':result},'upload':{'sortie':number,'samples':[],'logger':{'dropped_samples':0}}}
+        with tempfile.TemporaryDirectory() as tmp:
+            root=pathlib.Path(tmp)
+            with patch.object(server,'WORKSPACES',root/'agents'),patch.object(server,'RUNTIME',root/'runtime'),patch.object(server.Harness,'plan',planner),patch.object(server.Harness,'sortie',sortie):
+                h=server.Harness();h.start({'map':{**WORLD,'targets':[{'x':150,'y':50}]},'config':CONFIG,'rounds':1,'until_done':True,'speed':100});h.thread.join(12)
+                self.assertEqual(h.state['phase'],'rescued');self.assertEqual(len(list((h.agent/'observations').glob('*.json'))),4);self.assertEqual(calls[-1],(5,True))
+    def test_until_complete_worker_ignores_estimated_sortie_deadline(self):
+        end=worker(RETURN_ROM,max_seconds=.5,until_done=True)[-1];self.assertEqual(end['result'],'docked');self.assertGreater(end['state']['t'],.5);self.assertIn('safety_checks',end['upload']);self.assertEqual(end['upload']['logger']['reserved_safety_bytes'],2048)
+    def test_shelter_checkpoint_evidence_survives_bounded_log(self):
+        world={**WORLD,'objects':[{'id':'roof','type':'shade','x':32,'y':38,'w':28,'h':25}],'obstacles':[]}
+        rom='loop:\nsense r0 time\nlt r0 2\njnz r0 go\nsense r0 time\nlt r0 31\njnz r0 hold\nmove -1\nyield\njmp loop\ngo:\nmove 1\nyield\njmp loop\nhold:\nmove 0\nyield\njmp loop'
+        end=worker(rom,map=world,until_done=True,max_seconds=5,config={**CONFIG,'lightNoise':0})[-1];self.assertEqual(end['result'],'docked');log=end['upload'];self.assertTrue(log['safety_checks'][0]['safe']);self.assertEqual(log['safety_checks'][0]['dock'],0);self.assertGreaterEqual(log['safety_checks'][0]['dwell'],2);self.assertLessEqual(log['logger']['used_bytes'],65536)
+        with tempfile.TemporaryDirectory() as tmp:
+            root=pathlib.Path(tmp);(root/'observations').mkdir();(root/'observations/sortie-001.json').write_text(json.dumps(log));check=log['safety_checks'][0]
+            belief={'shelters':[{'x':check['odom_x'],'y':check['odom_y'],'shelter_status':'verified','evidence':['observations/sortie-001.json safety_checks t=30']}]};server.verify_shelter_evidence(belief,root)
+            belief['shelters'][0]['x']=500
+            with self.assertRaises(ValueError):server.verify_shelter_evidence(belief,root)
     def test_no_departure_no_upload(self):
         end=worker('yield\njmp 0')[-1];self.assertEqual(end['result'],'never_departed');self.assertIsNone(end['upload'])
     def test_stranded_no_upload(self):
@@ -59,7 +108,7 @@ move 1
 yield
 jmp loop
 '''
-        end=worker(rom,max_seconds=125)[-1];self.assertEqual(end['result'],'docked');log=end['upload'];self.assertLessEqual(log['logger']['used_bytes'],65536);self.assertGreater(log['logger']['dropped_samples'],0)
+        end=worker(rom,max_seconds=125,config={**CONFIG,"lightLevel":.1,"lightNoise":0})[-1];self.assertEqual(end['result'],'docked');log=end['upload'];self.assertLessEqual(log['logger']['used_bytes'],65536);self.assertGreater(log['logger']['dropped_samples'],0)
     def test_two_sortie_loop_delivers_before_next_planner(self):
         calls=[]
         def planner(h,turn,review_only=False):
@@ -124,6 +173,19 @@ jmp loop
             rows=[{'t':0,'readings':reading},{'t':.1,'readings':{**reading,'odom_x':200}},{'t':.2,'readings':{**reading,'range_seq':2,'range_valid':0,'range':-1}}]
             (root/'observations/test.json').write_text(json.dumps({'samples':rows}));result=dock_data.project_ranges(root,cell_cm=5)
             self.assertEqual(result['occupied'],[{'x':5.0,'y':25.0,'hits':1}]);self.assertTrue(result['light_samples']);self.assertEqual(result['light_samples'][0]['light'],.12)
+    def test_ble_projection_uses_received_pose_and_unique_packets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=pathlib.Path(tmp);(root/'observations').mkdir();(root/'hardware.json').write_text(json.dumps(server.public_hardware(CONFIG)))
+            r={'range':-1,'range_valid':0,'range_seq':1,'odom_x':999,'odom_y':888,'yaw':90,'ble_valid':1,'ble_seq':4,'ble_id':2,'ble_rssi':-62,'ble_channel':38,'ble_x':12,'ble_y':7,'ble_yaw':0,'ble_time':1.2,'ble_confirmed':0}
+            rows=[{'t':1.2,'readings':r},{'t':1.4,'readings':{**r,'odom_x':200}},{'t':3,'readings':{**r,'ble_valid':0}}]
+            (root/'observations/radio.json').write_text(json.dumps({'samples':rows}))
+            packets=dock_data.project_ranges(root)['ble_samples'];self.assertEqual(len(packets),1);self.assertEqual(packets[0]['antenna_x'],12);self.assertEqual(packets[0]['rssi_dbm'],-62)
+            for key in ('distance','target_x','target_y','bearing','world'):self.assertNotIn(key,packets[0])
+    def test_ble_defaults_replace_legacy_detector(self):
+        cfg=server.hardware({'virtualRescue':True});self.assertTrue(cfg['ble']);self.assertFalse(cfg['virtualRescue'])
+        self.assertEqual(server.public_hardware(cfg)['ble']['contact_reference_dbm'],-35)
+        for key,value in [('bleDrop',2),('bleNoise',-1),('bleContact',0)]:
+            with self.assertRaises(ValueError):server.hardware({key:value})
     def test_photo_contract_has_no_fixed_range_or_camera_defaults(self):
         contract=server.public_hardware(CONFIG);self.assertEqual(contract['range_sensor_mount']['channels'],1);self.assertFalse(contract['camera']);self.assertFalse(contract['bumper_sensor']);self.assertFalse(contract['virtual_rescue_detector']);self.assertIn('provisional',contract['calibration_status'])
         with self.assertRaises(ValueError):server.node_validate('sense r0 front',64)

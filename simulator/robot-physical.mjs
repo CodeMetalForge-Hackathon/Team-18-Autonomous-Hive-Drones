@@ -28,5 +28,10 @@ export async function buildPhysicalRover(){
  mesh(new T.SphereGeometry(1.4,10,8),material('#ff2d2d',{emissive:'#ff2525',emissiveIntensity:1.2}),group,-9,46,23);
  function wire(points,color,r=.7){mesh(new T.TubeGeometry(new T.CatmullRomCurve3(points.map(p=>new T.Vector3(...p))),30,r,6,false),material(color));}
  for(const[i,color]of ['#57291e','#dc3e28','#efc338'].entries()){const z=i*1.5;wire([[-20,51,z-12],[-14,77,z-7],[7,84,z+8],[29,67,z+10],[33,40,z+7]],color);wire([[-17,47,z-22],[-13,59,z-15],[0,56,z-9]],color,.5);}
- return {group,head,wheels,parts:2};
+ // Approximate USB sniffer board and lead: mounting is a simulator assumption.
+ const ble=new T.Group();ble.name='ble-sniffer-assumed-mount';group.add(ble);
+ box(ble,32,55,23,32,2,12,blue);box(ble,13,55,23,7,3,10,silver);box(ble,30,57,23,7,2,7,black);
+ for(let i=0;i<4;i++)box(ble,43-i*2,56.3,23,1,.3,8-i,material('#d7b565'));
+ wire([[12,55,23],[0,62,28],[-28,55,12]],'#151a18',1);
+ return {group,head,wheels,ble,parts:2};
 }
