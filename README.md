@@ -86,6 +86,12 @@ References: [Plus SE hardware](https://docs.m5stack.com/en/core/StickC-Plus_SE),
 
 ## Aurora 930 Pro depth camera
 
+Direct color capture now works on Windows ARM via the vendor's x64 SDK under emulation. `tools/camera_capture.cpp` uses the SDK headers and DLL; `tools/build_camera.ps1` builds it with the Visual Studio C++ tools. Pass the vendor SDK include directory to `-SdkInclude`, put the viewer directory on PATH, and run `camera_capture.exe <output-directory>`. Close DeptrumScope first because it owns the camera exclusively. Decode the saved color frame with `python tools/decode_camera.py <output-directory>`.
+
+Verified output is a 640×400 NV12 color frame, visually inspected with the rover and table obstacles visible. Depth bytes are saved for future analysis, but depth units/metadata are not yet validated. Some vendor image-format fields are unset; the decoder instead checks the configured YUV mode and exact frame size. Camera frames and vendor binaries stay outside Git.
+
+`tools/supervised_step.py` executes one USB movement step, bounded to 250 ms and speed 30, then verifies stopped/disarmed state. Inspect a fresh camera frame before each step and capture a new frame afterward; this command does not inspect images or learn motion itself.
+
 Windows 11 ARM64 detects the camera as USB VID `3251`, PID `1930`. The vendor's bundled INF supports x86/x64 only. This development computer instead uses Microsoft's signed, inbox ARM64 `winusb.inf` / `WinUSB.sys` driver, selected for this camera through SetupAPI. The vendor interface GUID `{ca3e7ab9-b4c3-4ae6-8251-579ef933890f}` is registered in the camera's Device Parameters. No unsigned driver package or driver-signature bypass was used.
 
 Device status is OK with problem code 0. Hiwonder's DeptrumScope 3.6.17 runs under Windows x64 emulation; its log confirms `model: Aurora 930` and a successful device connection. Live depth frames still need visual confirmation: open the viewer's **2D** tab and click **Start** under **Stream & Capture**, following the [official Windows guide](https://wiki.hiwonder.com/projects/Aurora930-Pro/en/latest/docs/3.Configuration_and_Usage_in_Windows.html).
