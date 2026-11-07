@@ -1,0 +1,7 @@
+build/
+.venv/
+*.bin
+*.elf
+*.map
+*.log
+__pycache__/
