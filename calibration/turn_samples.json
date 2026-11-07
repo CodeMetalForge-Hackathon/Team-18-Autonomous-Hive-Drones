@@ -2,6 +2,8 @@
   "schema": 1,
   "direction": "Q",
   "speed": 40,
+  "tracker": "color-pca-v1",
+  "accuracy_caveat": "Historical approximate estimates. Orange wires and colored background objects can bias this tracker. Not ground-truth precision validation.",
   "units": "clockwise image degrees and milliseconds; not physical yaw",
   "conditions": "RoverC Pro on this tabletop, USB tether attached, external board-axis tracker",
   "samples": [

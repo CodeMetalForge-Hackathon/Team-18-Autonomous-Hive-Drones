@@ -36,7 +36,7 @@ def shared_trial(folder, args):
         if failures:
             raise failures[0]
         try:
-            report = wheel_step(args.port, args.speeds, args.ms, args.ramp_ms)
+            report = wheel_step(args.port, args.speeds, args.ms, args.ramp_ms, args.pulse)
         except TrialError as error:
             report = error.report
             (folder/'trial.json').write_text(json.dumps(report, indent=2))
@@ -62,8 +62,10 @@ def main():
     parser.add_argument('--dll-directory', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--port', default='COM5')
+    parser.add_argument('--pulse', action='store_true')
     args = parser.parse_args()
-    if not 20 <= args.ms <= 600 or any(abs(v)>40 for v in args.speeds):
+    limit, duration_limit = (60, 150) if args.pulse else (40, 600)
+    if not 20 <= args.ms <= duration_limit or any(abs(v)>limit for v in args.speeds) or (args.pulse and args.ramp_ms):
         parser.error('Trial capped at 600 ms and wheel speed 40')
     folder = args.output/(time.strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:8])
     folder.mkdir(parents=True)
@@ -83,7 +85,7 @@ def main():
                     raise RuntimeError('Camera did not start; no motor command issued')
                 time.sleep(0.05)
             try:
-                report = wheel_step(args.port, args.speeds, args.ms, args.ramp_ms)
+                report = wheel_step(args.port, args.speeds, args.ms, args.ramp_ms, args.pulse)
             except TrialError as error:
                 (folder/'trial.json').write_text(json.dumps(error.report, indent=2))
                 # Preserve the post-stop frames when a motor/communication error

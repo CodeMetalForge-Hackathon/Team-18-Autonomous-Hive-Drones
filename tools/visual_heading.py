@@ -1,8 +1,10 @@
-"""One camera-feedback heading correction in a manually cleared test area.
+"""Legacy coarse camera-feedback correction in a manually cleared test area.
 
 Default: capture and propose only. --execute authorizes one bounded rotation,
 then a second capture to measure the result. No path planning, repeated motion,
 or connection to the onboard navigator. Current calibration supports Q only.
+The color-axis tracker can be biased by wires; its residual is not validated
+physical accuracy. Use screen-marker recordings for precision calibration.
 """
 import argparse
 import json
@@ -78,6 +80,7 @@ def main():
     environment = dict(os.environ)
     environment["PATH"] = str(args.dll_directory)+os.pathsep+environment.get("PATH", "")
     report = {"executed": False, "target_degrees": args.target,
+              "tracker":"legacy-color-pca", "accuracy":"unvalidated; possible wire/background bias",
               "scope": "external supervision; one rotation in manually cleared area"}
     try:
         report["before"] = capture(args.camera_exe, run/"before", environment,

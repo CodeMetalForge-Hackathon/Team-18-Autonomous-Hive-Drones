@@ -33,6 +33,22 @@ class WheelProfileTest(unittest.TestCase):
         self.assertTrue(failure.exception.report['stopped_disarmed'])
         link.close.assert_called_once()
 
+    def test_boost_is_available_only_in_bounded_pulse_mode(self):
+        for duration, ramp, speeds in [(151,0,[60]*4), (100,1,[60]*4), (100,0,[61]*4)]:
+            with self.assertRaises(ValueError):
+                wheel_step('nonexistent', speeds, duration, ramp, pulse=True)
+        with self.assertRaises(ValueError):
+            wheel_step('nonexistent', [60]*4, 100)
+
+    def test_unacknowledged_stop_cannot_arm_a_trial(self):
+        link=MagicMock()
+        with patch('wheel_step.serial.Serial', return_value=link), \
+             patch('wheel_step.read_for', side_effect=['', 'connected=1 moving=0 stop_ack=0', 'moving=0 armed=0 stop_ack=0']):
+            with self.assertRaises(TrialError) as failure:
+                wheel_step('fake',[40]*4,100)
+        self.assertNotIn('stopped_disarmed',failure.exception.report)
+        self.assertEqual(failure.exception.report['commands'],[])
+
 
 if __name__ == '__main__':
     unittest.main()

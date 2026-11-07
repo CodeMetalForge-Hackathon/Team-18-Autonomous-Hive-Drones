@@ -27,6 +27,15 @@ def check(port):
             return read_for(link, wait)
 
         send("DISARM")
+        assert 'DISARMED' in send('PULSE 100 0 0 0 0')
+        assert 'ARMED' in send('ARM')
+        pulse = send('PULSE 100 0 0 0 0', 0.3)
+        assert 'DRIVING' in pulse and 'TIMED_STOP' in pulse, pulse
+        assert 'moving=0' in send('STATUS')
+        assert 'stop_ack=1' in send('STATUS'), 'Zero-speed stop was not acknowledged by all wheels'
+        assert 'INVALID_COMMAND' in send('PULSE 151 0 0 0 0')
+        assert 'INVALID_COMMAND' in send('PULSE 100 61 0 0 0')
+        send('DISARM')
         assert "DISARMED" in send("WHEELS 0 0 0 0"), "Wheels accepted while disarmed"
         assert "ARMED" in send("ARM"), "Rover did not arm"
         assert "DRIVING" in send("WHEELS 0 0 0 0", 0.08), "Wheel API unavailable"

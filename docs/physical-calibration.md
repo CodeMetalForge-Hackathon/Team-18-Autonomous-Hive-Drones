@@ -1,6 +1,10 @@
 # External-camera motion observations
 
 Measured on 2026-11-07 with the USB-tethered RoverC Pro on the current tabletop.
+**Measurement caveat:** the historical color-PCA angle estimates below can be
+biased by orange wires or background objects inside the crop. The quoted
+sub-degree residuals are detector outputs, not proven physical heading accuracy.
+Screen-marker measurements are being introduced to replace that ambiguity.
 These are supervision measurements, **not parameters validated for onboard
 autonomy**. The external camera never supplies observations to `Navigator`.
 

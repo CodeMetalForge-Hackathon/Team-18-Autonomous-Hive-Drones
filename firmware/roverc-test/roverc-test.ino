@@ -12,10 +12,13 @@ volatile uint32_t watchdogStopAt = 0;
 volatile bool physicalStop = false;
 volatile uint8_t lastMotorError = 0, lastMotorErrorWheel = 0;
 volatile uint32_t motorErrorCount = 0;
+volatile bool stopAcknowledged = false;
+volatile bool stopPending = true;
 SemaphoreHandle_t motorMutex;
 int nextWheel = 0;
 bool connected = false;
 bool armed = false;
+bool markerMode = false;
 uint32_t lastCheck = 0;
 Navigator navigator;
 Sonar sonar;
@@ -33,10 +36,16 @@ bool setMotor(uint8_t wheel, int8_t speed) {
   if (result) { lastMotorError=result; lastMotorErrorWheel=wheel; ++motorErrorCount; }
   return result == 0;
 }
-void stopMotors() {
-  xSemaphoreTake(motorMutex, portMAX_DELAY);
-  for (int i = 0; i < 4; ++i) setMotor(i, 0);
+void stopLocked() {
+  bool ok = true;
+  for (int i = 0; i < 4; ++i) if (!setMotor(i, 0)) ok = false;
   moving = false;
+  stopAcknowledged = ok;
+  stopPending = !ok;
+}
+void stopMotors(bool force = false) {
+  xSemaphoreTake(motorMutex, portMAX_DELAY);
+  if (force || moving || !stopAcknowledged) stopLocked();
   xSemaphoreGive(motorMutex);
 }
 bool probe() {
@@ -50,16 +59,24 @@ void motorWatchdog(void*) {
   for (;;) {
     if (digitalRead(39) == LOW) physicalStop = true;
     xSemaphoreTake(motorMutex, portMAX_DELAY);
-    if (moving && (physicalStop || (int32_t)(millis() - stopAt) >= 0)) {
-      for (int i=0;i<4;++i) setMotor(i,0);
-      moving=false; watchdogStopAt=millis(); watchdogExpired=true;
+    bool expired = moving && (physicalStop || (int32_t)(millis() - stopAt) >= 0);
+    if (expired || stopPending) {
+      stopLocked();
+      if (expired) { watchdogStopAt=millis(); watchdogExpired=true; }
     }
     xSemaphoreGive(motorMutex);
     vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
 void wifiScreen();
+void markerScreen() {
+  M5.Display.fillScreen(TFT_BLACK);
+  int width = M5.Display.width(), height = M5.Display.height();
+  M5.Display.fillRect(0, 0, width*3/8, height, TFT_CYAN);
+  M5.Display.fillRect(width*5/8, 0, width-width*5/8, height, TFT_MAGENTA);
+}
 void screen() {
+  if (markerMode) { markerScreen(); return; }
   M5.Display.fillScreen(TFT_BLACK);
   M5.Display.setCursor(4, 4);
   M5.Display.setTextColor(TFT_WHITE);
@@ -76,18 +93,20 @@ void screen() {
 void report() {
   Serial.printf("ROVER_STATUS connected=%d moving=%d armed=%d next_wheel=%d address=0x38 sda=0 scl=26\n", connected, moving, armed, nextWheel + 1);
   Serial.printf("AGENT_STATUS sonar_configured=%d range_valid=%d range_mm=%u auto_state=%d next_motion=%c\n", Sonar::configured, Navigator::usable(millis(), rangeReading), rangeReading.mm, navigator.state, motions[nextMotion]);
-  Serial.printf("MOTOR_DIAG error_count=%lu last_error=%u last_wheel=%u\n", (unsigned long)motorErrorCount, lastMotorError, lastMotorErrorWheel);
+  Serial.printf("MOTOR_DIAG error_count=%lu last_error=%u last_wheel=%u stop_ack=%d stop_pending=%d\n", (unsigned long)motorErrorCount, lastMotorError, lastMotorErrorWheel, stopAcknowledged, stopPending);
 }
-bool driveWheels(const int8_t speeds[4]) {
+bool driveWheels(const int8_t speeds[4], int limit = 40, uint32_t durationMs = 300) {
   if (physicalStop || digitalRead(39) == LOW) { stopMotors(); return false; }
-  for (int i=0; i<4; ++i) if (speeds[i] < -40 || speeds[i] > 40) { stopMotors(); return false; }
+  for (int i=0; i<4; ++i) if (speeds[i] < -limit || speeds[i] > limit) { stopMotors(); return false; }
   xSemaphoreTake(motorMutex, portMAX_DELAY);
+  if (stopPending) { xSemaphoreGive(motorMutex); Serial.println("STOP_UNCONFIRMED"); return false; }
+  stopAcknowledged = false;
   bool ok = true;
   for (int i=0; i<4; ++i) {
     if (!setMotor(i, speeds[i])) { ok = false; break; }
   }
-  if (ok) { stopAt=millis()+300; moving=true; }
-  else { for (int i=0; i<4; ++i) setMotor(i, 0); moving=false; }
+  if (ok) { stopAt=millis()+durationMs; moving=true; }
+  else { stopLocked(); }
   xSemaphoreGive(motorMutex);
   if (!ok) { navigator.stop(); armed=false; connected=false; Serial.println("ROVER_NOT_FOUND"); return false; }
   return true;
@@ -110,7 +129,7 @@ void startAuto() {
   stopMotors(); armed=false;
   connected=probe();
   rangeReading=sonar.read(millis());
-  if (!connected) { navigator.stop(); Serial.println("ROVER_NOT_FOUND"); return; }
+  if (!connected || !stopAcknowledged) { navigator.stop(); Serial.println("ROVER_NOT_FOUND"); return; }
   if (!navigator.start(millis(), rangeReading)) { Serial.println("SONAR_UNAVAILABLE"); return; }
   Serial.println("AUTO_STARTED");
 }
@@ -123,13 +142,30 @@ void command(const char* cmd) {
     Serial.println("STOPPED");
   } else if (!strcmp(cmd, "STATUS")) {
     connected = probe(); report();
+  } else if (!strcmp(cmd, "MARKER") || !strcmp(cmd, "UI")) {
+    navigator.stop(); stopMotors(); armed=false;
+    markerMode = !strcmp(cmd, "MARKER");
+    screen();
+    Serial.println(markerMode ? "MARKER_READY" : "UI_READY");
   } else if (!strcmp(cmd, "ARM")) {
     physicalStop=false; watchdogExpired=false;
     navigator.stop();
-    stopMotors(); connected = probe(); armed = connected;
+    stopMotors(true); connected = probe(); armed = connected && stopAcknowledged;
     Serial.println(armed ? "ARMED" : "ROVER_NOT_FOUND");
   } else if (!strcmp(cmd, "AUTO")) {
     startAuto();
+  } else if (!strncmp(cmd, "PULSE ", 6)) {
+    navigator.stop();
+    int duration, speeds[4]; char extra;
+    bool valid = sscanf(cmd, "PULSE %d %d %d %d %d %c", &duration, &speeds[0], &speeds[1], &speeds[2], &speeds[3], &extra) == 5;
+    valid = valid && duration >= 20 && duration <= 150;
+    for (int i=0; valid && i<4; ++i) valid = speeds[i] >= -60 && speeds[i] <= 60;
+    if (!valid) { stopMotors(); Serial.println("INVALID_COMMAND"); return; }
+    if (!armed) { stopMotors(); Serial.println("DISARMED"); return; }
+    if (moving) { stopMotors(); armed=false; Serial.println("INVALID_BUSY"); return; }
+    int8_t wheelSpeeds[4];
+    for (int i=0; i<4; ++i) wheelSpeeds[i] = speeds[i];
+    Serial.println(driveWheels(wheelSpeeds, 60, duration) ? "DRIVING" : "MOTOR_ERROR");
   } else if (!strncmp(cmd, "WHEELS ", 7)) {
     navigator.stop();
     int speeds[4]; char extra;
