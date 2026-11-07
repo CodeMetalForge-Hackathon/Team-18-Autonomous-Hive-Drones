@@ -55,6 +55,34 @@ bool probe() {
   xSemaphoreGive(motorMutex);
   return found;
 }
+bool writeServo(uint8_t channel, uint16_t value, bool pulse) {
+  if (channel < 1 || channel > 2 || (pulse ? value < 500 || value > 2500 : value > 180)) return false;
+  if (physicalStop || digitalRead(39) == LOW || moving || !stopAcknowledged) return false;
+  xSemaphoreTake(motorMutex, portMAX_DELAY);
+  rover.beginTransmission(ADDRESS);
+  rover.write(pulse ? 0x20 + 2 * (channel - 1) : 0x10 + channel - 1);
+  if (pulse) rover.write(uint8_t(value >> 8));
+  rover.write(uint8_t(value & 0xff));
+  uint8_t error = rover.endTransmission();
+  xSemaphoreGive(motorMutex);
+  if (error) Serial.printf("SERVO_ERROR channel=%u i2c_error=%u\n", channel, error);
+  return error == 0;
+}
+void reportServos() {
+  uint8_t angles[2], pulses[4];
+  bool ok = true;
+  xSemaphoreTake(motorMutex, portMAX_DELAY);
+  rover.beginTransmission(ADDRESS); rover.write(0x10);
+  if (rover.endTransmission(false) || rover.requestFrom(ADDRESS, uint8_t(2)) != 2) ok = false;
+  if (ok) for (int i=0; i<2; ++i) angles[i] = rover.read();
+  rover.beginTransmission(ADDRESS); rover.write(0x20);
+  if (rover.endTransmission(false) || rover.requestFrom(ADDRESS, uint8_t(4)) != 4) ok = false;
+  if (ok) for (int i=0; i<4; ++i) pulses[i] = rover.read();
+  xSemaphoreGive(motorMutex);
+  if (!ok) { Serial.println("SERVO_READ_ERROR"); return; }
+  Serial.printf("SERVO_STATUS angle1=%u angle2=%u pulse1_us=%u pulse2_us=%u feedback=target_registers\n",
+                angles[0], angles[1], (pulses[0]<<8)|pulses[1], (pulses[2]<<8)|pulses[3]);
+}
 void motorWatchdog(void*) {
   for (;;) {
     if (digitalRead(39) == LOW) physicalStop = true;
@@ -91,7 +119,7 @@ void screen() {
   M5.Display.printf("A:200ms B:STOP Next:%c", motions[nextMotion]);
 }
 void report() {
-  Serial.printf("ROVER_STATUS connected=%d moving=%d armed=%d next_wheel=%d address=0x38 sda=0 scl=26\n", connected, moving, armed, nextWheel + 1);
+  Serial.printf("ROVER_STATUS protocol=3 connected=%d moving=%d armed=%d next_wheel=%d address=0x38 sda=0 scl=26\n", connected, moving, armed, nextWheel + 1);
   Serial.printf("AGENT_STATUS sonar_configured=%d range_valid=%d range_mm=%u auto_state=%d next_motion=%c\n", Sonar::configured, Navigator::usable(millis(), rangeReading), rangeReading.mm, navigator.state, motions[nextMotion]);
   Serial.printf("MOTOR_DIAG error_count=%lu last_error=%u last_wheel=%u stop_ack=%d stop_pending=%d\n", (unsigned long)motorErrorCount, lastMotorError, lastMotorErrorWheel, stopAcknowledged, stopPending);
 }
@@ -138,10 +166,50 @@ void command(const char* cmd) {
   if (!strcmp(cmd, "STOP") || !strcmp(cmd, "DISARM")) {
     navigator.stop();
     stopMotors();
+    M5.Speaker.stop();
     if (!strcmp(cmd, "DISARM")) armed = false;
     Serial.println("STOPPED");
   } else if (!strcmp(cmd, "STATUS")) {
     connected = probe(); report();
+  } else if (!strcmp(cmd, "CAPABILITIES")) {
+    Serial.printf("ROVER_CAPABILITIES version=3 wheel_limit=40 pulse_limit=60 pulse_max_ms=150 servo_channels=2 servo_angle_max=180 servo_pulse_min_us=500 servo_pulse_max_us=2500 buzzer=1 sonar_configured=%d\n", Sonar::configured);
+  } else if (!strcmp(cmd, "BUZZER")) {
+    Serial.printf("BUZZER_STATUS enabled=%d playing=%d volume=%u pin=2\n", M5.Speaker.isEnabled(), M5.Speaker.isPlaying(), M5.Speaker.getVolume());
+  } else if (!strcmp(cmd, "SILENCE")) {
+    M5.Speaker.stop();
+    Serial.println("BUZZER_OK playing=0");
+  } else if (!strncmp(cmd, "TONE ", 5)) {
+    int frequency, duration, volume; char extra;
+    bool valid = sscanf(cmd, "TONE %d %d %d %c", &frequency, &duration, &volume, &extra) == 3;
+    if (!valid || frequency < 20 || frequency > 20000 || duration < 1 || duration > 5000 || volume < 0 || volume > 255) {
+      M5.Speaker.stop(); Serial.println("INVALID_COMMAND"); return;
+    }
+    if (physicalStop || digitalRead(39)==LOW) { M5.Speaker.stop(); Serial.println("DISARMED"); return; }
+    M5.Speaker.setVolume(volume);
+    if (M5.Speaker.tone(frequency, duration)) Serial.printf("BUZZER_OK frequency=%d duration_ms=%d volume=%d\n", frequency, duration, volume);
+    else Serial.println("BUZZER_ERROR");
+  } else if (!strcmp(cmd, "SONAR")) {
+    rangeReading=sonar.read(millis());
+    Serial.printf("SONAR_STATUS configured=%d valid=%d range_mm=%u age_ms=%lu signal_pin=%d echo_us=%lu power_enabled=%d signal_level=%d\n", Sonar::configured,
+                  Navigator::usable(millis(), rangeReading), rangeReading.mm,
+                  (unsigned long)(millis()-rangeReading.timestamp), Sonar::signalPin,
+                  sonar.echoMicroseconds(), M5.Power.getExtOutput(),
+                  Sonar::configured ? digitalRead(Sonar::signalPin) : -1);
+  } else if (!strcmp(cmd, "SERVOS")) {
+    reportServos();
+  } else if (!strncmp(cmd, "SERVO ", 6) || !strncmp(cmd, "SERVO_US ", 9)) {
+    navigator.stop();
+    bool pulse = !strncmp(cmd, "SERVO_US ", 9);
+    int channel, value; char extra;
+    bool valid = sscanf(cmd + (pulse ? 9 : 6), "%d %d %c", &channel, &value, &extra) == 2;
+    valid = valid && channel >= 1 && channel <= 2 && (pulse ? value >= 500 && value <= 2500 : value >= 0 && value <= 180);
+    if (!valid) { stopMotors(); armed=false; Serial.println("INVALID_COMMAND"); return; }
+    if (!armed) { Serial.println("DISARMED"); return; }
+    if (moving || !stopAcknowledged) { stopMotors(); armed=false; Serial.println("INVALID_BUSY"); return; }
+    bool ok = writeServo(channel, value, pulse);
+    armed=false;
+    if (ok) Serial.printf("SERVO_OK channel=%d %s=%d\n", channel, pulse ? "pulse_us" : "angle", value);
+    else Serial.println("SERVO_FAILED");
   } else if (!strcmp(cmd, "MARKER") || !strcmp(cmd, "UI")) {
     navigator.stop(); stopMotors(); armed=false;
     markerMode = !strcmp(cmd, "MARKER");
@@ -196,9 +264,11 @@ void setup() {
   cfg.external_display_value = 0;
   cfg.internal_mic = false;
   cfg.internal_imu = false;
-  cfg.internal_spk = false;
+  cfg.internal_spk = true;
   cfg.fallback_board = m5::board_t::board_M5StickCPlus;
   M5.begin(cfg);
+  M5.Speaker.setVolume(32);
+  M5.Speaker.stop();
   Serial.println("DISPLAY_READY");
   Serial.begin(115200);
   M5.Display.setRotation(1);
@@ -220,7 +290,7 @@ void setup() {
 void loop() {
   M5.update();
   serviceWifiSafety();
-  if (physicalStop) { navigator.stop(); stopMotors(); armed=false; }
+  if (physicalStop) { navigator.stop(); stopMotors(); M5.Speaker.stop(); armed=false; }
   if (M5.BtnB.wasPressed()) { navigator.stop(); stopMotors(); armed=false; Serial.println("DISARMED"); }
   if (M5.BtnA.wasHold() && !M5.BtnB.isPressed() && !armed) startAuto();
   if (M5.BtnA.wasClicked() && !M5.BtnB.isPressed() && !moving && !armed && !navigator.active()) {
@@ -241,7 +311,10 @@ void loop() {
       cmd[count] = 0;
       if (overflow) { navigator.stop(); stopMotors(); armed=false; Serial.println("INVALID_COMMAND"); }
       else if (!strcmp(cmd, "WIFI")) reportWifi();
-      else if (count) { if (strcmp(cmd, "STATUS")) revokeRemote(); command(cmd); }
+      else if (count) {
+        if (strcmp(cmd, "STATUS") && strcmp(cmd, "CAPABILITIES") && strcmp(cmd, "SONAR") && strcmp(cmd, "SERVOS") && strcmp(cmd, "BUZZER")) revokeRemote();
+        command(cmd);
+      }
       count = 0; overflow = false;
     } else if (count < sizeof(cmd)-1) cmd[count++] = c;
     else overflow = true;

@@ -19,7 +19,7 @@ The M5Stick creates a WPA2-protected Wi-Fi network whose name and generated pass
 
 Click **Arm driving**, then hold a direction button (or arrow key; Q/E rotate). Releasing stops movement. STOP/Space, leaving the page, button B, or a lost control connection stops and disarms the rover. One browser owns driving at a time. Commands carry a session token and sequence number so a delayed command cannot override a newer stop.
 
-A separate FreeRTOS task checks the motor deadline every 10 ms and stops on button B or 300 ms without a renewed movement command. Motor I2C operations are serialized with a mutex. This keeps the stop timer independent of HTTP handling; bus latency can add to the stop time. Autonomous navigation remains disabled without the sonar driver.
+A separate FreeRTOS task checks the motor deadline every 10 ms and stops on button B or 300 ms without a renewed movement command. Motor I2C operations are serialized with a mutex. This keeps the stop timer independent of HTTP handling; bus latency can add to the stop time.
 
 `node tools/test_control_page.js` checks browser hold/release and focus-loss behavior. Once connected to rover Wi-Fi, `python tools/check_wifi.py` checks the HTTP control API using speed zero. The USB camera is unrelated to this control network.
 
@@ -42,7 +42,57 @@ Release the key/button to stop. **Space**, leaving the controller window, or the
 
 Serial commands at 115200 baud: `ARM`, `DISARM`, `STOP`, `STATUS`, and `DRIVE <direction> <speed>`. Directions are `F/B/L/R/Q/E`; speed is 0–40. Drive commands require arming and expire after 300 ms. Physical wheel diagnostics with A are available only while disarmed.
 
+Protocol 3 adds built-in buzzer control: `BUZZER` reports state,
+`TONE <Hz> <milliseconds> <volume>` plays one finite tone, and `SILENCE` stops it.
+Volume is 0?255, tones last 1?5000 ms, and STOP/button B silence audio.
+The external Grove speaker is not needed.
+
+Protocol 2 also exposes `SONAR`, `SERVOS`, `SERVO <channel> <angle>` and
+`SERVO_US <channel> <microseconds>`. Servo channels are 1 and 2; electrical
+ranges are 0–180 degrees or 500–2500 microseconds. Servo commands require arming
+with the wheels stopped, then disarm. `SERVOS` reads target registers, not
+physical position. Servos hold their last target after STOP; mechanical travel
+and channel attachments are not calibrated. `CAPABILITIES` reports the protocol.
+
 For controller calibration, `WHEELS <w0> <w1> <w2> <w3>` accepts four signed speeds in [-40,40], in I2C register order. It uses the same arming, physical stop, mutex, and 300 ms watchdog as `DRIVE`. Invalid input stops the motors. `tools/wheel_step.py` sends one bounded pulse, optionally with a cubic acceleration/braking envelope (`--ramp-ms`); this is a commanded speed profile, not a claim of physically smooth motion. Emergency stopping remains immediate.
+
+### Python control
+
+`tools/rover.py` provides a synchronous serial client using the dependencies in
+`requirements.txt`. Run from `tools/`, or add that directory to Python's import
+path. Close other serial controllers before opening it.
+
+```python
+from rover import Rover
+
+with Rover("COM5", camera_config="../.camera-recorder.json") as rover:
+    print(rover.status())
+    print(rover.sonar())
+    print(rover.servos())
+    frame = rover.snapshot()
+```
+
+`wheels(values, duration_ms, pulse=False)` commands four signed motor channels;
+normal steps allow +/-40 for 20–1000 ms. Firmware-timed pulse steps allow +/-60
+for 20–150 ms. Each step attempts stop/disarm even on failure and returns a
+report whose `valid` field must be checked. Late or fragmented acknowledgements
+are collected without repeating a completed movement.
+
+`servo(channel, angle=...)` or `servo(channel, pulse_us=...)` sets an electrical
+target without remapping it. Check the attachment's clearance before use;
+electrical limits are not safe mechanical limits. Other methods are
+`capabilities()`, `buzzer()`, `tone(frequency, duration_ms, volume=32)`,
+`silence()`, and `stop()`. Set `allow_motion=False` to permit observations only.
+Use one client per port and one calling thread per client.
+
+Camera access uses the existing recorder without taking ownership of the
+device. `snapshot()` returns a base64 PNG plus frame timestamps, and waits for a
+frame captured after the request. The configuration file contains the recorder
+address and token; keep it outside source control. Omit `camera_config` when
+only serial control is needed.
+
+Run the client tests without hardware using
+`python -m unittest discover -s tools -p test_rover.py`.
 
 ## Onboard movement tests and navigation
 
@@ -52,7 +102,7 @@ The firmware stops all motors at startup. It does not move automatically or comm
 
 - Lift the rover so its wheels are clear before testing.
 - Click button A to move the whole rover at speed 20 for 200 milliseconds, then stop. Successive clicks test forward, reverse, strafe left/right, and rotate left/right. The screen shows the next direction. No USB connection is needed for these tests.
-- Hold button A to request autonomous mode. It currently refuses to start because the physical sonar model and connection have not been supplied.
+- Hold button A to request autonomous mode; it requires a fresh valid sonar reading.
 - Button B stops all motors.
 - The screen reports whether the rover responds on I2C.
 - USB serial commands are terminated by a newline.
@@ -61,7 +111,13 @@ Keep the rear power switch within reach. The timed stop runs on the M5Stick; swi
 
 `Navigator.h` is an onboard reactive obstacle-avoidance policy. With a valid forward-facing sonar, it drives forward, stops at 300 mm, and turns in 120 ms pulses until two distinct readings show at least 500 mm clearance. It stops on invalid/stale readings (over 200 ms old) or after three seconds of unsuccessful turning. This is local avoidance, not mapping, path planning, or a trained policy. A single front sonar cannot detect every side obstacle or drop-off.
 
-`Sonar.h` deliberately returns invalid data until the actual sensor model, voltage and wiring are known. Do not substitute clear-distance constants. The eventual driver must timestamp successful physical readings and return invalid data for errors/no echo. The camera is for external supervision only and is not an input to the onboard agent. Autonomous mode will run without a laptop once a real sensor driver is implemented; the 300 ms USB command expiry applies to manual driving.
+`Sonar.h` reads the Seeed Grove Ultrasonic Ranger's shared trigger/echo signal
+on GPIO33, verified with the sensor and cable connected to this rover's StickC
+Grove socket. Measurements
+are spaced at least 60 ms apart and time out after 25 ms; no echo is invalid,
+not clear space. Set `ROVER_SONAR_PIN=-1` when that sensor is absent. The camera
+remains external and is not an input to the onboard navigator. The 300 ms USB
+command expiry applies to externally commanded driving.
 
 ## Validation
 
@@ -116,6 +172,5 @@ Windows 11 ARM64 detects the camera as USB VID `3251`, PID `1930`. The vendor's 
 Device status is OK with problem code 0. Hiwonder's DeptrumScope 3.6.17 runs under Windows x64 emulation; its log confirms `model: Aurora 930` and a successful device connection. Live depth frames still need visual confirmation: open the viewer's **2D** tab and click **Start** under **Stream & Capture**, following the [official Windows guide](https://wiki.hiwonder.com/projects/Aurora930-Pro/en/latest/docs/3.Configuration_and_Usage_in_Windows.html).
 
 The viewer, extracted driver reference, and local installation helper are in `C:\Users\naclo\Downloads\Aurora930-Pro`. These third-party binaries are kept outside the repository. The camera is not yet connected to rover navigation or obstacle avoidance.
-
 
 

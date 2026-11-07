@@ -58,11 +58,14 @@ def check(port):
         assert "INVALID_COMMAND" in send("X" * 50, 0.5), "Overlong command not rejected"
         status = send("STATUS")
         assert "moving=0" in status and "armed=0" in status, status
-        assert "SONAR_UNAVAILABLE" in send("AUTO"), "Unconfigured sonar allowed autonomy"
         status = send("STATUS")
-        assert "moving=0" in status and "sonar_configured=0" in status, status
+        assert "moving=0" in status and "armed=0" in status, status
+        if "sonar_configured=0" in status:
+            assert "SONAR_UNAVAILABLE" in send("AUTO"), "Unconfigured sonar allowed autonomy"
+        else:
+            assert "SONAR_STATUS" in send("SONAR"), "Configured sonar did not report status"
         print("PASS: arming, 300ms command expiry, disarm, and malformed-command stop; all speeds zero.")
-        print("PASS: autonomous mode refused without a configured sonar.")
+        print("PASS: sonar status checked without starting configured autonomous navigation.")
     finally:
         try:
             link.write(b"DISARM\n")
