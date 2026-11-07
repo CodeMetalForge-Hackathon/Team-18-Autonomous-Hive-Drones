@@ -19,8 +19,8 @@ def read_for(link, seconds):
 def step(port, direction, speed, milliseconds):
     if direction not in "FBLRQE" or len(direction) != 1:
         raise ValueError("Unknown direction")
-    if not 0 <= speed <= 30 or not 20 <= milliseconds <= 250:
-        raise ValueError("Supervised steps are limited to speed 30 and 250 ms")
+    if not 0 <= speed <= 40 or not 20 <= milliseconds <= 1000:
+        raise ValueError("Supervised steps are limited to speed 40 and 1000 ms")
     link = serial.Serial(port=None, baudrate=115200, timeout=0.01, write_timeout=0.1)
     link.dtr = link.rts = False
     link.port = port
@@ -35,8 +35,14 @@ def step(port, direction, speed, milliseconds):
         if "ARMED" not in read_for(link, 0.2):
             raise RuntimeError("Rover did not arm")
         started = time.monotonic()
-        link.write(f"DRIVE {direction} {speed}\n".encode())
-        result = read_for(link, milliseconds / 1000)
+        result = ""
+        while (time.monotonic() - started) * 1000 < milliseconds:
+            link.write(f"DRIVE {direction} {speed}\n".encode())
+            remaining = milliseconds / 1000 - (time.monotonic() - started)
+            response = read_for(link, min(0.08, max(0, remaining)))
+            result += response
+            if any(error in response for error in ("ROVER_NOT_FOUND", "INVALID_", "DISARMED", "INIT_DISPLAY")):
+                raise RuntimeError("Step aborted on controller error: " + response)
         link.write(b"STOP\nDISARM\nSTATUS\n")
         stopped = read_for(link, 0.4)
         if "DRIVING" not in result or "moving=0" not in stopped or "armed=0" not in stopped:

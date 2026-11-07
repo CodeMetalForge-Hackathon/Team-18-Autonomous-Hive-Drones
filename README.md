@@ -90,7 +90,11 @@ Direct color capture now works on Windows ARM via the vendor's x64 SDK under emu
 
 Verified output is a 640×400 NV12 color frame, visually inspected with the rover and table obstacles visible. Depth bytes are saved for future analysis, but depth units/metadata are not yet validated. Some vendor image-format fields are unset; the decoder instead checks the configured YUV mode and exact frame size. Camera frames and vendor binaries stay outside Git.
 
-`tools/supervised_step.py` executes one USB movement step, bounded to 250 ms and speed 30, then verifies stopped/disarmed state. Inspect a fresh camera frame before each step and capture a new frame afterward; this command does not inspect images or learn motion itself.
+`tools/supervised_step.py` executes one USB movement step, bounded to 1000 ms and speed 40, then verifies stopped/disarmed state. Commands renew every 80 ms while the step runs; the firmware still expires each command after 300 ms. It aborts immediately on reported motor errors or controller reset. Inspect a fresh camera frame before each step and capture a new frame afterward; this command does not inspect images or learn motion itself.
+
+`tools/measure_motion.py` compares a selected rigid rover patch in two images and reports camera-plane displacement and correlation. It is not calibrated metric odometry, and rotation, occlusion or cable drag can invalidate the estimate. Synthetic translation and textureless-image tests are in `tools/test_motion_measurement.py`.
+
+Physical feedback trials: a speed-40 forward pulse for 600 ms produced clear image displacement; 180–250 ms pulses at speeds 25–30 barely moved. A lateral pulse induced significant rotation, so ideal mecanum kinematics do not yet predict this unit accurately. A subsequent rotation reported a transient rover I2C error and disarmed; communication recovered after reset. Motion calibration is incomplete, and autonomous obstacle avoidance has not been demonstrated.
 
 Windows 11 ARM64 detects the camera as USB VID `3251`, PID `1930`. The vendor's bundled INF supports x86/x64 only. This development computer instead uses Microsoft's signed, inbox ARM64 `winusb.inf` / `WinUSB.sys` driver, selected for this camera through SetupAPI. The vendor interface GUID `{ca3e7ab9-b4c3-4ae6-8251-579ef933890f}` is registered in the camera's Device Parameters. No unsigned driver package or driver-signature bypass was used.
 
