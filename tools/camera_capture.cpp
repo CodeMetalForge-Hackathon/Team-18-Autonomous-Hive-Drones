@@ -8,13 +8,34 @@
 #include <iostream>
 #include <thread>
 #include <cstdlib>
+#include <io.h>
+#include <fcntl.h>
 #include "deptrum/device.h"
 #include "deptrum/stream.h"
 
 using namespace deptrum;
 using namespace deptrum::stream;
 
+bool pipeWrite(int fd, const void* data, unsigned count) {
+  auto bytes = static_cast<const char*>(data);
+  while (count) {
+    int written = _write(fd, bytes, count);
+    if (written <= 0) return false;
+    bytes += written; count -= written;
+  }
+  return true;
+}
+
 int main(int argc, char** argv) {
+  bool pipeMode = argc > 1 && std::string(argv[1]) == "--pipe";
+  int binaryFd = -1;
+  if (pipeMode) {
+    binaryFd = _dup(_fileno(stdout));
+    _setmode(binaryFd, _O_BINARY);
+    // Keep vendor diagnostics out of the binary frame protocol.
+    _dup2(_fileno(stderr), _fileno(stdout));
+    SetStdHandle(STD_OUTPUT_HANDLE, GetStdHandle(STD_ERROR_HANDLE));
+  }
   std::cout.setf(std::ios::unitbuf);
   auto dll = LoadLibraryA("stream_aurora900.dll");
   if (!dll) { std::cerr << "Cannot load vendor DLL: " << GetLastError() << '\n'; return 1; }
@@ -29,10 +50,10 @@ int main(int argc, char** argv) {
   for (auto& device : devices) std::cout << device.model << " " << device.ir_camera.port_path << '\n';
   if (code || devices.empty()) return 2;
   if (argc < 2) return 0;
-  int requested = argc > 2 ? std::atoi(argv[2]) : 1;
-  if (requested < 1 || requested > 300) { std::cerr << "Frame count must be 1..300\n"; return 8; }
+  int requested = pipeMode ? 0 : (argc > 2 ? std::atoi(argv[2]) : 1);
+  if (!pipeMode && (requested < 1 || requested > 300)) { std::cerr << "Frame count must be 1..300\n"; return 8; }
   std::filesystem::path output = argv[1];
-  std::filesystem::create_directories(output);
+  if (!pipeMode) std::filesystem::create_directories(output);
   auto device = manager->CreateDevice(devices[0]);
   if (!device) return 3;
   code = device->Open();
@@ -53,19 +74,35 @@ int main(int argc, char** argv) {
   code = stream->Start();
   std::cout << "Start: " << code << '\n';
   int saved = 0;
-  if (!code) for (int attempt=0; attempt<requested+12 && saved<requested; ++attempt) {
+  int failures = 0;
+  bool pipeOk = true;
+  if (!code) for (int attempt=0; pipeOk && (pipeMode ? failures<12 : attempt<requested+12 && saved<requested); ++attempt) {
     StreamFrames frames;
     code = stream->GetFrames(frames, 2000);
     std::cout << "Frames: " << code << " count: " << frames.count << '\n';
-    if (code) continue;
+    if (code) { ++failures; continue; }
+    failures = 0;
     auto destination = output;
-    if (requested > 1) {
+    if (!pipeMode && requested > 1) {
       destination /= "sample-" + std::to_string(saved);
       std::filesystem::create_directories(destination);
     }
     bool hasRgb = false;
     for (auto& frame : frames.frame_ptr) {
       if (!frame || !frame->data || frame->size <= 0 || frame->size > 100000000) continue;
+      if (pipeMode) {
+        if (frame->frame_type != 1) continue;
+        uint32_t header[4] = {0x314d5246, static_cast<uint32_t>(frame->cols),
+                              static_cast<uint32_t>(frame->rows), static_cast<uint32_t>(frame->size)};
+        uint64_t timestamps[2] = {static_cast<uint64_t>(frame->timestamp),
+          static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::system_clock::now().time_since_epoch()).count())};
+        pipeOk = pipeWrite(binaryFd, header, sizeof(header)) &&
+                 pipeWrite(binaryFd, timestamps, sizeof(timestamps)) &&
+                 pipeWrite(binaryFd, frame->data.get(), frame->size);
+        hasRgb = true;
+        continue;
+      }
       if (requested > 1 && frame->frame_type != 1) continue;
       std::cout << "Frame type=" << frame->frame_type << " format=" << frame->image_format
                 << " " << frame->cols << "x" << frame->rows << " bytes=" << frame->size << '\n';
@@ -84,5 +121,6 @@ int main(int argc, char** argv) {
     if (hasRgb) ++saved;
   }
   stream->Stop(); device->DestroyStream(stream); device->Close();
-  return saved == requested ? 0 : 7;
+  if (binaryFd >= 0) _close(binaryFd);
+  return (pipeMode ? !pipeOk : saved == requested) ? 0 : 7;
 }

@@ -10,6 +10,8 @@ from decode_camera import decode
 
 def analyze(folder, box, heading):
     trial = json.loads((folder/'trial.json').read_text())
+    if trial.get('error') or not trial.get('stopped_disarmed'):
+        raise ValueError('Faulted or unverified trial cannot be used for calibration')
     trajectory = []
     for sample in sorted(folder.glob('sample-*'), key=lambda p:int(p.name.split('-')[1])):
         metadata = json.loads((sample/'frame-1.json').read_text())

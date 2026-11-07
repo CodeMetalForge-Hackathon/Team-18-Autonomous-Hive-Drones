@@ -54,3 +54,33 @@ Example measurement (manually select a crop containing only the board):
 python tools/camera_pose.py ../roverc-tools/calibration/correct-q-180/color.png --box 395 100 90 85 --heading 0
 python -m unittest discover -s tools -p test_camera_pose.py
 ```
+
+## Timed four-wheel trials
+
+The direct `WHEELS` API and camera recordings now provide command timestamps,
+the intervening trajectory, and median poses before/after motion. Below are
+200 ms pulses without ramps, all on the same tethered setup. Measurements use
+the newer exposure-tolerant board tracker; raw recordings remain local.
+
+| Local trial ID | Wheel commands | Change x | Change y | Change heading |
+|---|---|---:|---:|---:|
+| 143212-b9a62a18 | 40,20,40,20 | +0.40 px | -0.48 px | +0.07° |
+| 143331-5eb93b36 | 40,35,40,35 | +1.84 px | -0.24 px | +0.05° |
+| 143443-c270ad51 | 40,40,40,40 | +5.19 px | -1.74 px | -1.32° |
+
+These are single samples, not reliable average gains. The first is effectively
+stationary at this measurement precision. Reducing one wheel group can stall
+the robot, so a proportional speed reduction is not yet a valid straightening
+strategy. Earlier forward pulses produced larger displacement and yaw; tether
+forces and hardware condition still need to be controlled for repeatability.
+
+A 400 ms Q-turn trial with 100 ms acceleration/braking ramps aborted on
+`ROVER_NOT_FOUND` / `MOTOR_ERROR`. Do not treat it as a learned response or as
+proof of smooth movement. The subsequent camera and USB status checks found the
+robot stopped and disarmed, with the I2C device responding again. Motor error
+count/code/wheel telemetry has been added to diagnose subsequent faults.
+
+The next physical calibration depends on a stable base power/connection check.
+It should compare repeated pulses and ramps at comparable displacement, then
+fit wheel compensation using only successful trials. Precise, smooth control
+has **not** yet been established.

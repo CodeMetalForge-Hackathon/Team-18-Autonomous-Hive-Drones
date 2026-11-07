@@ -1,5 +1,6 @@
 import unittest
-from wheel_step import envelope, wheel_step
+from unittest.mock import MagicMock, patch
+from wheel_step import envelope, wheel_step, TrialError
 
 
 class WheelProfileTest(unittest.TestCase):
@@ -18,6 +19,18 @@ class WheelProfileTest(unittest.TestCase):
                                        ([0, 0, 0, 0], 200, 101)]:
             with self.assertRaises(ValueError):
                 wheel_step('nonexistent', speeds, duration, ramp)
+
+    def test_preflight_failure_disarms_closes_and_preserves_report(self):
+        link = MagicMock()
+        with patch('wheel_step.serial.Serial', return_value=link), \
+             patch('wheel_step.read_for', side_effect=['', 'connected=0 moving=0']), \
+             patch('wheel_step.time.sleep'):
+            with self.assertRaises(TrialError) as failure:
+                wheel_step('fake', [40,40,40,40], 200)
+        self.assertIn('Rover not ready', failure.exception.report['error'])
+        self.assertEqual(failure.exception.report['commands'], [])
+        self.assertEqual(link.write.call_args.args, (b'DISARM\n',))
+        link.close.assert_called_once()
 
 
 if __name__ == '__main__':

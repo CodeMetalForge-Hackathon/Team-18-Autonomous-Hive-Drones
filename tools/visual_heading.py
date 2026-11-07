@@ -19,6 +19,7 @@ from PIL import Image
 from camera_pose import board_pose
 from decode_camera import decode
 from supervised_step import step
+from camera_shared import CONFIG, snapshot
 
 
 # Independently inspected camera measurements; see physical-calibration.md.
@@ -46,11 +47,14 @@ def proposal(heading, target, tolerance=5):
 def capture(executable, folder, environment, box, heading):
     # Unique folders prevent a failed capture from reusing an old image.
     folder.mkdir(parents=True, exist_ok=False)
-    process = subprocess.run([str(executable), str(folder)], env=environment,
-                             capture_output=True, timeout=25)
-    (folder/"capture.log").write_bytes(process.stdout + process.stderr)
-    if process.returncode:
-        raise RuntimeError(f"Camera capture failed; inspect {folder/'capture.log'}")
+    if CONFIG.exists():
+        snapshot(folder)
+    else:
+        process = subprocess.run([str(executable), str(folder)], env=environment,
+                                 capture_output=True, timeout=25)
+        (folder/"capture.log").write_bytes(process.stdout + process.stderr)
+        if process.returncode:
+            raise RuntimeError(f"Camera capture failed; inspect {folder/'capture.log'}")
     decode(folder)
     with Image.open(folder/"color.png") as image:
         return board_pose(image, box, heading)

@@ -12,6 +12,12 @@ import serial
 from supervised_step import read_for
 
 
+class TrialError(RuntimeError):
+    def __init__(self, message, report):
+        super().__init__(message)
+        self.report = report
+
+
 def envelope(elapsed_ms, duration_ms, ramp_ms):
     if elapsed_ms < 0 or elapsed_ms >= duration_ms:
         return 0.0
@@ -70,6 +76,10 @@ def wheel_step(port, speeds, duration_ms, ramp_ms=0):
             raise RuntimeError("Stop not verified: "+status)
         report["stopped_disarmed"] = True
         return report
+    except Exception as error:
+        report["error"] = str(error)
+        report["aborted_unix_ms"] = time.time()*1000
+        raise TrialError(str(error), report) from error
     finally:
         try:
             link.write(b"DISARM\n")

@@ -88,6 +88,11 @@ References: [Plus SE hardware](https://docs.m5stack.com/en/core/StickC-Plus_SE),
 
 ## Aurora 930 Pro depth camera
 
+Continuous progress video is recorded to the development machine's external
+drive at `D:\Team18-Recordings`. The background recorder shares snapshots with
+the calibration tools rather than competing for the camera. See
+[recording setup and controls](docs/camera-recording.md).
+
 Direct color capture now works on Windows ARM via the vendor's x64 SDK under emulation. `tools/camera_capture.cpp` uses the SDK headers and DLL; `tools/build_camera.ps1` builds it with the Visual Studio C++ tools. Pass the vendor SDK include directory to `-SdkInclude`, put the viewer directory on PATH, and run `camera_capture.exe <output-directory>`. Close DeptrumScope first because it owns the camera exclusively. Decode the saved color frame with `python tools/decode_camera.py <output-directory>`.
 
 Verified output is a 640×400 NV12 color frame, visually inspected with the rover and table obstacles visible. Depth bytes are saved for future analysis, but depth units/metadata are not yet validated. Some vendor image-format fields are unset; the decoder instead checks the configured YUV mode and exact frame size. Camera frames and vendor binaries stay outside Git.

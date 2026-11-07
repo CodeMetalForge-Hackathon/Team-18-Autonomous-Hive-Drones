@@ -10,6 +10,8 @@ volatile uint32_t stopAt = 0;
 volatile bool watchdogExpired = false;
 volatile uint32_t watchdogStopAt = 0;
 volatile bool physicalStop = false;
+volatile uint8_t lastMotorError = 0, lastMotorErrorWheel = 0;
+volatile uint32_t motorErrorCount = 0;
 SemaphoreHandle_t motorMutex;
 int nextWheel = 0;
 bool connected = false;
@@ -27,7 +29,9 @@ bool setMotor(uint8_t wheel, int8_t speed) {
   rover.beginTransmission(ADDRESS);
   rover.write(wheel);
   rover.write((uint8_t)speed);
-  return rover.endTransmission() == 0;
+  uint8_t result = rover.endTransmission();
+  if (result) { lastMotorError=result; lastMotorErrorWheel=wheel; ++motorErrorCount; }
+  return result == 0;
 }
 void stopMotors() {
   xSemaphoreTake(motorMutex, portMAX_DELAY);
@@ -72,6 +76,7 @@ void screen() {
 void report() {
   Serial.printf("ROVER_STATUS connected=%d moving=%d armed=%d next_wheel=%d address=0x38 sda=0 scl=26\n", connected, moving, armed, nextWheel + 1);
   Serial.printf("AGENT_STATUS sonar_configured=%d range_valid=%d range_mm=%u auto_state=%d next_motion=%c\n", Sonar::configured, Navigator::usable(millis(), rangeReading), rangeReading.mm, navigator.state, motions[nextMotion]);
+  Serial.printf("MOTOR_DIAG error_count=%lu last_error=%u last_wheel=%u\n", (unsigned long)motorErrorCount, lastMotorError, lastMotorErrorWheel);
 }
 bool driveWheels(const int8_t speeds[4]) {
   if (physicalStop || digitalRead(39) == LOW) { stopMotors(); return false; }
