@@ -42,6 +42,8 @@ Release the key/button to stop. **Space**, leaving the controller window, or the
 
 Serial commands at 115200 baud: `ARM`, `DISARM`, `STOP`, `STATUS`, and `DRIVE <direction> <speed>`. Directions are `F/B/L/R/Q/E`; speed is 0–40. Drive commands require arming and expire after 300 ms. Physical wheel diagnostics with A are available only while disarmed.
 
+For controller calibration, `WHEELS <w0> <w1> <w2> <w3>` accepts four signed speeds in [-40,40], in I2C register order. It uses the same arming, physical stop, mutex, and 300 ms watchdog as `DRIVE`. Invalid input stops the motors. `tools/wheel_step.py` sends one bounded pulse, optionally with a cubic acceleration/braking envelope (`--ramp-ms`); this is a commanded speed profile, not a claim of physically smooth motion. Emergency stopping remains immediate.
+
 ## Onboard movement tests and navigation
 
 `firmware/roverc-test/roverc-test.ino` uses M5Unified and M5GFX. The Plus SE has no IMU, so IMU initialization is disabled. Rover communication uses I2C bus 0 (M5Unified reserves bus 1 for internal peripherals), SDA GPIO 0, SCL GPIO 26, and I2C address 0x38, following M5Stack's RoverC Pro example.
@@ -95,6 +97,12 @@ Verified output is a 640×400 NV12 color frame, visually inspected with the rove
 `tools/measure_motion.py` compares a selected rigid rover patch in two images and reports camera-plane displacement and correlation. It is not calibrated metric odometry, and rotation, occlusion or cable drag can invalidate the estimate. Synthetic translation and textureless-image tests are in `tools/test_motion_measurement.py`.
 
 `tools/camera_pose.py` estimates the visible orange board's center and axis from an operator-selected crop and approximate heading. External-camera trials demonstrated one move–observe–correct sequence: a forward pulse introduced about 28° of image heading error, and a measured rotation brought the heading back within 1° of image-right. See [physical calibration observations](docs/physical-calibration.md) for measurements and limitations. This is not yet a repeatable autonomous controller.
+
+`tools/visual_heading.py` uses the measured Q-turn gain to propose one correction from a fresh camera frame; `--execute` performs that single bounded correction and measures the result. Hardware validation reduced an 18.73° error to 2.95°. Other directions are still uncalibrated.
+
+`camera_capture.exe <directory> <count>` records up to 300 color frames with timestamps (the default remains one RGBD snapshot). `tools/record_wheel_trial.py` records before, during and after one wheel pulse; `tools/analyze_trial.py` extracts a trajectory and reports the measured change. The camera is external ground truth for learning and evaluating the controller. It is not an input to the eventual onboard autonomous policy. Precision and smoothness are still under active calibration.
+
+All authored source is kept here: reusable setup helpers are in `tools/setup/`, diagnostic helpers in `tools/diagnostics/`, and control/calibration tools in `tools/`. Setup scripts take local paths/device IDs as arguments. The WinUSB helper defaults to inspecting the driver; `-Install` explicitly changes the selected camera's driver. The Wi-Fi diagnostic requires `-AllowNetworkSwitch` because it temporarily interrupts normal Wi-Fi. Vendor SDKs, installed toolchains, generated binaries, recordings, credentials and flash backups remain local and are not published.
 
 Physical feedback trials: a speed-40 forward pulse for 600 ms produced clear image displacement; 180–250 ms pulses at speeds 25–30 barely moved. A lateral pulse induced significant rotation, so ideal mecanum kinematics do not yet predict this unit accurately. A subsequent rotation reported a transient rover I2C error and disarmed; communication recovered after reset. Motion calibration is incomplete, and autonomous obstacle avoidance has not been demonstrated.
 

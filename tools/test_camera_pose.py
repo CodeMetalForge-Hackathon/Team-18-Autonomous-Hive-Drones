@@ -20,6 +20,12 @@ class BoardPoseTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             board_pose(Image.new("RGB", (100, 100), "white"), (0, 0, 100, 100), 0)
 
+    def test_dark_board_remains_trackable(self):
+        board = Image.new("RGB", (120, 120), (70, 70, 70))
+        ImageDraw.Draw(board).rectangle((30, 53, 90, 67), fill=(65, 23, 8))
+        pose = board_pose(board, (10, 10, 100, 100), 0)
+        self.assertAlmostEqual(pose['heading_degrees'], 0, delta=1)
+
     def test_round_patch_has_no_heading(self):
         image = Image.new("RGB", (100, 100), "white")
         ImageDraw.Draw(image).ellipse((25, 25, 75, 75), fill=(210, 70, 25))

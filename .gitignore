@@ -5,3 +5,8 @@ build/
 *.map
 *.log
 __pycache__/
+wifi-credentials.json
+rover-wifi-profile.xml
+recordings/
+feedback-runs/
+backup-parts/

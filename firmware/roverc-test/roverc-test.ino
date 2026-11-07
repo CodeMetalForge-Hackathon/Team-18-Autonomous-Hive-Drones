@@ -73,8 +73,21 @@ void report() {
   Serial.printf("ROVER_STATUS connected=%d moving=%d armed=%d next_wheel=%d address=0x38 sda=0 scl=26\n", connected, moving, armed, nextWheel + 1);
   Serial.printf("AGENT_STATUS sonar_configured=%d range_valid=%d range_mm=%u auto_state=%d next_motion=%c\n", Sonar::configured, Navigator::usable(millis(), rangeReading), rangeReading.mm, navigator.state, motions[nextMotion]);
 }
-bool drive(char direction, int speed) {
+bool driveWheels(const int8_t speeds[4]) {
   if (physicalStop || digitalRead(39) == LOW) { stopMotors(); return false; }
+  for (int i=0; i<4; ++i) if (speeds[i] < -40 || speeds[i] > 40) { stopMotors(); return false; }
+  xSemaphoreTake(motorMutex, portMAX_DELAY);
+  bool ok = true;
+  for (int i=0; i<4; ++i) {
+    if (!setMotor(i, speeds[i])) { ok = false; break; }
+  }
+  if (ok) { stopAt=millis()+300; moving=true; }
+  else { for (int i=0; i<4; ++i) setMotor(i, 0); moving=false; }
+  xSemaphoreGive(motorMutex);
+  if (!ok) { navigator.stop(); armed=false; connected=false; Serial.println("ROVER_NOT_FOUND"); return false; }
+  return true;
+}
+bool drive(char direction, int speed) {
   int8_t signs[4];
   switch (direction) {
     case 'F': signs[0]=1; signs[1]=1; signs[2]=1; signs[3]=1; break;
@@ -85,18 +98,8 @@ bool drive(char direction, int speed) {
     case 'E': signs[0]=-1; signs[1]=1; signs[2]=-1; signs[3]=1; break;
     default: stopMotors(); return false;
   }
-  xSemaphoreTake(motorMutex, portMAX_DELAY);
-  bool ok = true;
-  for (int i=0; i<4; ++i) {
-    if (!setMotor(i, signs[i]*speed)) {
-      ok = false; break;
-    }
-  }
-  if (ok) { stopAt=millis()+300; moving=true; }
-  else { for (int i=0; i<4; ++i) setMotor(i, 0); moving=false; }
-  xSemaphoreGive(motorMutex);
-  if (!ok) { navigator.stop(); armed=false; connected=false; Serial.println("ROVER_NOT_FOUND"); return false; }
-  return true;
+  for (int i=0; i<4; ++i) signs[i] *= speed;
+  return driveWheels(signs);
 }
 void startAuto() {
   stopMotors(); armed=false;
@@ -122,6 +125,16 @@ void command(const char* cmd) {
     Serial.println(armed ? "ARMED" : "ROVER_NOT_FOUND");
   } else if (!strcmp(cmd, "AUTO")) {
     startAuto();
+  } else if (!strncmp(cmd, "WHEELS ", 7)) {
+    navigator.stop();
+    int speeds[4]; char extra;
+    bool valid = sscanf(cmd, "WHEELS %d %d %d %d %c", &speeds[0], &speeds[1], &speeds[2], &speeds[3], &extra) == 4;
+    for (int i=0; valid && i<4; ++i) valid = speeds[i] >= -40 && speeds[i] <= 40;
+    if (!valid) { stopMotors(); Serial.println("INVALID_COMMAND"); return; }
+    if (!armed) { stopMotors(); Serial.println("DISARMED"); return; }
+    int8_t wheelSpeeds[4];
+    for (int i=0; i<4; ++i) wheelSpeeds[i] = speeds[i];
+    Serial.println(driveWheels(wheelSpeeds) ? "DRIVING" : "MOTOR_ERROR");
   } else {
     navigator.stop();
     char direction, extra; int speed;
@@ -180,7 +193,7 @@ void loop() {
     } else { stopMotors(); Serial.println("ROVER_NOT_FOUND"); }
     screen();
   }
-  if (Serial.available()) {
+  for (uint8_t bytesRead = 0; Serial.available() && bytesRead < 64; ++bytesRead) {
     static char cmd[32]; static uint8_t count = 0; static bool overflow = false;
     char c = Serial.read();
     if (c == '\n' || c == '\r') {

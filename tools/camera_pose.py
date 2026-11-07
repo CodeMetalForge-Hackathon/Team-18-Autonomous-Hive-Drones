@@ -19,7 +19,8 @@ def board_pose(image, box, prior_degrees):
         raise ValueError("Invalid tracking crop")
     rgb = np.asarray(image.convert("RGB"), dtype=float)[y:y+h, x:x+w]
     r, g, b = rgb.transpose(2, 0, 1)
-    mask = (r > 95) & (g > 20) & (g < 155) & (r > 1.45*g) & (r > 1.8*b)
+    # Ratios retain the orange outline when camera auto-exposure darkens it.
+    mask = (r > 45) & (g > 8) & (g < 155) & (r > 1.45*g) & (r > 1.8*b)
     yy, xx = np.nonzero(mask)
     if len(xx) < 35:
         raise ValueError("Too few orange board pixels")

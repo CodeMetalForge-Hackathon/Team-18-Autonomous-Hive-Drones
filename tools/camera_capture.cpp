@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iostream>
 #include <thread>
+#include <cstdlib>
 #include "deptrum/device.h"
 #include "deptrum/stream.h"
 
@@ -28,6 +29,8 @@ int main(int argc, char** argv) {
   for (auto& device : devices) std::cout << device.model << " " << device.ir_camera.port_path << '\n';
   if (code || devices.empty()) return 2;
   if (argc < 2) return 0;
+  int requested = argc > 2 ? std::atoi(argv[2]) : 1;
+  if (requested < 1 || requested > 300) { std::cerr << "Frame count must be 1..300\n"; return 8; }
   std::filesystem::path output = argv[1];
   std::filesystem::create_directories(output);
   auto device = manager->CreateDevice(devices[0]);
@@ -49,28 +52,37 @@ int main(int argc, char** argv) {
   if (code || !stream) { device->Close(); return 6; }
   code = stream->Start();
   std::cout << "Start: " << code << '\n';
-  bool saved = false;
-  if (!code) for (int attempt=0; attempt<12; ++attempt) {
+  int saved = 0;
+  if (!code) for (int attempt=0; attempt<requested+12 && saved<requested; ++attempt) {
     StreamFrames frames;
     code = stream->GetFrames(frames, 2000);
     std::cout << "Frames: " << code << " count: " << frames.count << '\n';
     if (code) continue;
+    auto destination = output;
+    if (requested > 1) {
+      destination /= "sample-" + std::to_string(saved);
+      std::filesystem::create_directories(destination);
+    }
+    bool hasRgb = false;
     for (auto& frame : frames.frame_ptr) {
       if (!frame || !frame->data || frame->size <= 0 || frame->size > 100000000) continue;
+      if (requested > 1 && frame->frame_type != 1) continue;
       std::cout << "Frame type=" << frame->frame_type << " format=" << frame->image_format
                 << " " << frame->cols << "x" << frame->rows << " bytes=" << frame->size << '\n';
       std::string stem = "frame-" + std::to_string(frame->frame_type);
-      std::ofstream raw(output / (stem + ".raw"), std::ios::binary);
+      std::ofstream raw(destination / (stem + ".raw"), std::ios::binary);
       raw.write(static_cast<const char*>(frame->data.get()), frame->size);
-      std::ofstream metadata(output / (stem + ".json"));
+      std::ofstream metadata(destination / (stem + ".json"));
       metadata << "{\"width\":" << frame->cols << ",\"height\":" << frame->rows
                << ",\"format\":" << frame->image_format << ",\"type\":" << frame->frame_type
                << ",\"configured_rgb_mode\":" << std::get<1>(mode)
-               << ",\"bytes\":" << frame->size << ",\"timestamp\":" << frame->timestamp << "}";
-      saved = true;
+               << ",\"bytes\":" << frame->size << ",\"timestamp\":" << frame->timestamp
+               << ",\"host_time_ms\":" << std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::system_clock::now().time_since_epoch()).count() << "}";
+      if (frame->frame_type == 1) hasRgb = true;
     }
-    if (saved) break;
+    if (hasRgb) ++saved;
   }
   stream->Stop(); device->DestroyStream(stream); device->Close();
-  return saved ? 0 : 7;
+  return saved == requested ? 0 : 7;
 }
