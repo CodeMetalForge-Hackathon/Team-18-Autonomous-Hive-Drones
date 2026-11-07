@@ -2,6 +2,7 @@
 """Trusted human observer + dock/Claude orchestrator. Never put this in agent cwd."""
 import argparse, copy, hashlib, json, math, os, pathlib, re, shutil, signal, subprocess, threading, time, uuid
 import replay
+import supervisor
 from runtime import find_node, node_script_path
 from dock_data import calculate, project_ranges
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
@@ -11,14 +12,16 @@ ROOT = pathlib.Path(__file__).resolve().parent
 WORKSPACES = pathlib.Path.home() / 'rover-opus-workspaces'
 RUNTIME = ROOT / '.runs'
 CONTRACT = (ROOT / 'opus-contract.txt').read_text()
+PROFILE='pan-sonar-light-v2'
+LEGACY_PROFILE='legacy-three-ray-v1'
 CLAUDE = shutil.which('claude')
 NODE = find_node()
 
 def node_path(path):
     return node_script_path(path, NODE)
 
-def node_validate(source, ram, world=None):
-    result = subprocess.run([NODE, node_path(ROOT / 'validate.mjs')], input=json.dumps({'source':source,'ram':ram,'world':world}), text=True, capture_output=True, timeout=15)
+def node_validate(source, ram, world=None, profile=PROFILE):
+    result = subprocess.run([NODE, node_path(ROOT / 'validate.mjs')], input=json.dumps({'source':source,'ram':ram,'world':world,'profile':profile}), text=True, capture_output=True, timeout=15)
     try:
         out = json.loads(result.stdout)
     except ValueError:
@@ -38,22 +41,34 @@ def validate_map(m):
     for b in obstacles:
         if not position(b) or not all(isinstance(b.get(k),(int,float)) and math.isfinite(b[k]) and b[k]>0 for k in ('w','h')) or b['x']+b['w']>250 or b['y']+b['h']>100:
             raise ValueError('Invalid obstacle')
+    objects=m.get('objects',[])
+    if not isinstance(objects,list) or len(objects)>100:raise ValueError('Invalid desk objects')
+    identities=set()
+    for obj in objects:
+        if not position(obj) or obj.get('type') not in ('laptop','bottle','hidebox','shade') or not isinstance(obj.get('id'),str) or not obj['id'] or obj['id'] in identities or not all(isinstance(obj.get(k),(int,float)) and not isinstance(obj[k],bool) and math.isfinite(obj[k]) and obj[k]>0 for k in ('w','h')) or obj['x']+obj['w']>250 or obj['y']+obj['h']>100:raise ValueError('Invalid desk object geometry or identity')
+        identities.add(obj['id'])
     return copy.deepcopy(m)
 
 def hardware(config):
-    limits={'range':(5,500),'noise':(0,30),'speed':(1,150),'turn':(10,360),'battery':(10,1000),'fov':(10,150),'vision':(20,600),'ram':(4,520000),'budget':(1,512),'seed':(0,999999)}
-    defaults={'range':80,'noise':.4,'speed':12,'turn':90,'battery':240,'fov':65,'vision':120,'ram':64,'budget':32,'seed':42}
+    limits={'range':(5,500),'rangeMin':(.5,10),'noise':(0,30),'panSpan':(20,180),'panSpeed':(10,180),'beam':(1,45),'pingHz':(1,10),'lightLevel':(0,1),'lightNoise':(0,.2),'coverLeak':(0,1),'speed':(1,150),'turn':(10,360),'battery':(10,1000),'fov':(10,150),'vision':(20,600),'ram':(4,520000),'budget':(1,512),'seed':(0,999999)}
+    defaults={'range':80,'rangeMin':2,'noise':.4,'panSpan':90,'panSpeed':90,'beam':15,'pingHz':5,'lightLevel':1,'lightNoise':.02,'coverLeak':.08,'speed':12,'turn':90,'battery':240,'fov':65,'vision':120,'ram':64,'budget':32,'seed':42}
     c={k:config.get(k,default) for k,default in defaults.items()}
     for k,(low,high) in limits.items():
-        if isinstance(c[k],bool) or not isinstance(c[k],(int,float)) or not math.isfinite(c[k]) or not low<=c[k]<=high:
-            raise ValueError('Invalid hardware setting: '+k)
+        if isinstance(c[k],bool) or not isinstance(c[k],(int,float)) or not math.isfinite(c[k]) or not low<=c[k]<=high:raise ValueError('Invalid hardware setting: '+k)
     for k in ('ram','budget','seed'):
         if int(c[k])!=c[k]:raise ValueError(k+' must be an integer')
-    c['camera']=bool(config.get('camera',True))
+    if c['rangeMin']>=c['range']:raise ValueError('Minimum range must be below maximum range')
+    c['sensorModel']=config.get('sensorModel',PROFILE)
+    if c['sensorModel'] not in (PROFILE,LEGACY_PROFILE):raise ValueError('Unknown hardware profile')
+    c['camera']=bool(config.get('camera',False));c['bumpers']=bool(config.get('bumpers',False));c['virtualRescue']=bool(config.get('virtualRescue',False))
     return c
 
-def public_hardware(c):
+def legacy_hardware(c):
     return {'range_max_cm':c['range'],'range_uniform_noise_cm':c['noise'],'translation_max_cm_s':c['speed'],'turn_max_deg_s':c['turn'],'energy_units':c['battery'],'camera':c['camera'],'camera_fov_deg':c['fov'],'camera_range_cm':c['vision'],'register_ram_bytes':c['ram'],'instructions_per_tick':c['budget'],'tick_seconds':.1,'rom_instruction_capacity':1024,'collision_radius_cm':8.5,'logger_flash_capacity_bytes':65536,'logger_hz':5,'dock_contact_radius_cm':6,'must_depart_dock_by_cm':10,'odometry':'command-integrated, independent +/-1% scale jitter per tick; collisions may accumulate error','coordinate_frame':'dock is origin; departure forward +x, right +y; yaw clockwise degrees','mission':'explore, map, locate rescue markers, return with observations; hidden marker count is unknown'}
+
+def public_hardware(c):
+    if c.get('sensorModel')==LEGACY_PROFILE:return {**legacy_hardware(c),'sensor_model':LEGACY_PROFILE,'schema_version':1}
+    return {**legacy_hardware(c),'schema_version':2,'collision_radius_cm':7.5,'sensor_model':PROFILE,'camera':c['camera'],'bumper_sensor':c['bumpers'],'virtual_rescue_detector':c['virtualRescue'],'range_min_cm':c['rangeMin'],'range_beam_deg':c['beam'],'range_sample_hz':c['pingHz'],'range_sensor_mount':{'pivot_forward_cm':4.3,'transducer_forward_cm':2.5,'height_cm':2.4,'channels':1,'pan_span_deg':c['panSpan'],'pan_speed_deg_s':c['panSpeed'],'control':'pan DEG holds an angle; sweep DEG_PER_SEC oscillates, sweep 0 holds current angle'},'light_sensor':{'position':'upward-facing on top of chassis','reading':'normalized 0..1, not lux or an oracle hidden flag','ambient_level':c['lightLevel'],'noise':c['lightNoise'],'box_light_leak':c['coverLeak']},'calibration_status':'Range, blind zone, beam width, servo speed, sensor dimensions, motion and light response are provisional simulator assumptions, NOT verified hardware specifications.','mission':'Explore and map using one steerable ultrasonic channel; find possible shelter using light changes and local geometry, verify with multiple samples and dwell, then return with evidence. Darkness alone does not prove concealment. RGB, bumpers and virtual rescue detection are absent unless explicitly enabled.','edge_sensing':'Horizontal sonar cannot sense tabletop drop-offs. Simulator edge guard blocks falls without emitting a range echo; do not assume a measured boundary wall.'}
 
 def read_agent(path, limit=262144):
     if path.is_symlink() or not path.is_file() or path.stat().st_size > limit:
@@ -78,6 +93,8 @@ class Harness:
             try:
                 previous=json.loads(states[-1].read_text());agent=pathlib.Path(previous.get('workspace_path',''))
                 if agent.is_relative_to(WORKSPACES) and agent.is_dir():
+                    previous.setdefault('config',{}).setdefault('sensorModel',LEGACY_PROFILE)
+                    if previous.get('frame'):previous['frame'].setdefault('c',{}).setdefault('sensorModel',LEGACY_PROFILE)
                     self.state=previous;self.agent=agent;self.run=states[-1].parent
                     if self.state.get('active'):
                         self.state.update(active=False,phase='interrupted',message='Server restarted during an experiment. Saved workspace is available; no undocked observations were recovered.')
@@ -102,7 +119,7 @@ class Harness:
         with self.lock:
             if self.state['active']:raise ValueError('An experiment is already active')
             if not CLAUDE:raise ValueError('Claude Code is not installed')
-            world=validate_map(body.get('map'));c=hardware(body.get('config',{}));node_validate('yield',int(c['ram']),world)
+            world=validate_map(body.get('map'));c=hardware(body.get('config',{}));node_validate('yield',int(c['ram']),world,c['sensorModel'])
             rounds=int(body.get('rounds',8));speed=float(body.get('speed',8))
             if not 1<=rounds<=50 or not 1<=speed<=100:raise ValueError('Use 1–50 sorties and 1–100× speed')
             run_id=time.strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:6]
@@ -122,6 +139,7 @@ class Harness:
     def resume(self,body):
         with self.lock:
             if self.state['active']:raise ValueError('An experiment is already active')
+            if self.state.get('config',{}).get('sensorModel',LEGACY_PROFILE)==LEGACY_PROFILE:raise ValueError('This archive uses legacy fixed sensors. Replay it, but start a new experiment for the photo-based hardware.')
             if not self.agent or not self.run or not self.state.get('world'):raise ValueError('No saved experiment')
             frame=self.state.get('frame')
             if self.state['phase']=='stranded' or frame and not frame.get('readings',{}).get('dock'):
@@ -143,6 +161,19 @@ class Harness:
             self.cancel.clear();self.state.update(active=True,phase='planning',message='Continuing the existing docked workspace.',max_rounds=start_turn+rounds-1,speed=speed)
             self.thread=threading.Thread(target=self.loop,args=(self.state['world'],c,rounds,speed,start_turn),daemon=True)
             self.persist();self.thread.start();return self.snapshot()
+    def update_environment(self,body):
+        with self.lock:
+            if not self.state.get('run_id'):raise ValueError('Start an experiment before changing its environment')
+            if self.state.get('config',{}).get('sensorModel')!=PROFILE:raise ValueError('Legacy experiments are replay-only for environment changes')
+            frame=self.state.get('frame')
+            if self.state['phase']=='deployed' or frame and not frame.get('readings',{}).get('dock'):raise ValueError('Changes can be applied only while the rover is at the dock')
+            updated=validate_map(body.get('map'));current=self.state['world']
+            if updated['start']!=current['start']:raise ValueError('Keep the dock fixed during an experiment')
+            if self.state['config'].get('virtualRescue') and updated['targets']!=current['targets']:raise ValueError('Keep virtual targets fixed during an experiment')
+            node_validate('yield',int(self.state['config']['ram']),updated,PROFILE)
+            self.state['world']=updated;self.state['world_revision']=self.state.get('world_revision',0)+1
+            self.event('environment','Human changed the table at the dock. Opus is not notified; it must discover changes from new sensor data.')
+            self.persist();return {'ok':True,'world_revision':self.state['world_revision']}
     def snapshot(self):
         with self.lock:return copy.deepcopy(self.state)
     def stop(self):
@@ -169,7 +200,7 @@ class Harness:
     def watch_workspace(self,process,agent,turn):
         seen={}
         while process.poll() is None and not self.cancel.is_set():
-            for name in ('map.json','notes.md','controller.rom','debrief.json'):
+            for name in ('map.json','notes.md','controller.rom','debrief.json','supervisor.json'):
                 try:
                     content=read_agent(agent/name);digest=hashlib.sha256(content.encode()).hexdigest()
                     if seen.get(name)==digest:continue
@@ -217,9 +248,12 @@ class Harness:
             except (OSError,ValueError):pass
             self.cancel.wait(.05)
     def plan(self,turn,review_only=False):
-        before=self.protected();self.phase('reviewing' if review_only else 'planning',f'Opus turn {turn}: '+('reviewing the last return without deploying.' if review_only else 'reading only its workspace and dock-delivered evidence.'))
-        args=[CLAUDE,'-p','--model','opus','--effort','high','--restricted','--safe-mode','--no-chrome','--disable-slash-commands','--setting-sources','','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--tools','Read,Write,Edit,Glob,Grep','--allowedTools','Read,Write,Edit,Glob,Grep','--permission-mode','dontAsk','--no-session-persistence','--output-format','stream-json','--include-partial-messages','--verbose','--system-prompt',CONTRACT]
-        prompt=f'Automatic dock turn {turn}. Read inbox.json and hardware.json, and validation.txt if present; inspect your existing workspace and delivered observations, then update controller.rom, mission.json, map.json, notes.md and debrief.json. Publish a concise evidence/decision summary. Finish this turn after writing the files; the harness will validate and deploy them.'
+        before=self.protected()
+        try:prior_map=json.loads(read_agent(self.agent/'map.json'))
+        except (ValueError,OSError):prior_map={}
+        self.phase('reviewing' if review_only else 'planning',f'Opus turn {turn}: '+('reviewing the last return without deploying.' if review_only else 'reading only its workspace and dock-delivered evidence.'))
+        args=[CLAUDE,'-p','--model','opus','--effort','high','--restricted','--safe-mode','--no-chrome','--disable-slash-commands','--setting-sources','','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--tools','Read,Write,Edit,Glob,Grep','--allowedTools','Read,Write,Edit,Glob,Grep','--permission-mode','dontAsk','--no-session-persistence','--output-format','stream-json','--include-partial-messages','--verbose','--system-prompt',(ROOT/'legacy/opus-contract-v1.txt').read_text() if self.state['config'].get('sensorModel')==LEGACY_PROFILE else CONTRACT]
+        prompt=f'Automatic dock turn {turn}. Read inbox.json and hardware.json, and validation.txt if present; inspect your existing workspace and delivered observations, then update controller.rom, mission.json, map.json, notes.md, debrief.json and supervisor.json. Publish a concise evidence/decision summary. Finish this turn after writing the files; the harness will validate and deploy them.'
         if review_only:prompt+=' This is REVIEW ONLY at the dock. Analyze the last delivered log and prepare an evidence-backed debrief and next ROM/plan. Nothing will be deployed during this call.'
         stderr_path=self.run/f'claude-{turn:03d}.stderr.log'
         streamed=False;result=None
@@ -265,12 +299,15 @@ class Harness:
         if mission['action']=='deploy':
             seconds=mission.get('max_seconds',60)
             if isinstance(seconds,bool) or not isinstance(seconds,(int,float)) or not math.isfinite(seconds) or not 5<=seconds<=180:raise ValueError('max_seconds must be 5–180')
-            node_validate(rom,int(self.state['config']['ram']))
+            node_validate(rom,int(self.state['config']['ram']),profile=self.state['config'].get('sensorModel',PROFILE))
         debrief=json.loads(read_agent(self.agent/'debrief.json'))
         inbox=json.loads(read_agent(self.agent/'inbox.json'));latest=inbox.get('latest_observation');expected=int(pathlib.Path(latest).stem.split('-')[-1]) if latest else None
         validate_debrief(debrief,expected)
+        if self.state['config'].get('sensorModel')!=LEGACY_PROFILE:
+            supervisor.validate_brief(json.loads(read_agent(self.agent/'supervisor.json')),expected)
+            supervisor.validate_belief(json.loads(read_agent(self.agent/'map.json')),expected or 0,prior_map)
         archive=self.run/f'turn-{turn:03d}';archive.mkdir(exist_ok=True)
-        for name in ('mission.json','controller.rom','map.json','notes.md','debrief.json'):
+        for name in ('mission.json','controller.rom','map.json','notes.md','debrief.json','supervisor.json'):
             path=self.agent/name
             if path.exists():(archive/name).write_text(read_agent(path))
         summary=str(mission.get('summary',''))[:3000]
@@ -315,7 +352,8 @@ class Harness:
                         self.event('validation',str(e),turn=turn)
                         (self.agent/'validation.txt').write_text('Your output was not deployed. Fix the following local output/ROM validation error. No new environment data exists.\n'+str(e))
                 if mission['action']=='finish':self.phase('finished','Opus ended the experiment: '+str(mission.get('summary','')));break
-                result=self.sortie(world,c,turn,speed,mission,rom,found)
+                with self.lock:current_world=copy.deepcopy(self.state.get('world',world))
+                result=self.sortie(current_world,c,turn,speed,mission,rom,found)
                 if result['result']!='docked':
                     self.phase('stranded',f'Sortie {turn}: {result["result"]}. No observations uploaded; Opus has not seen this outing.');break
                 self.phase('downloading',f'Physical dock connection: downloading sortie {turn} observations and recharging.')
@@ -377,6 +415,7 @@ class Handler(SimpleHTTPRequestHandler):
         route=urlparse(self.path);query=parse_qs(route.query)
         try:
             if route.path=='/api/status':return self.send_json({'backend':True,'claude_available':bool(CLAUDE),'state':harness.snapshot(),'workspace':harness.workspace(),'events':[e for e in harness.events if e['id']>int(query.get('after',['0'])[0])]})
+            if route.path=='/api/supervisor':return self.send_json(supervisor.projection(harness))
             if route.path=='/api/history':return self.send_json(replay.history(RUNTIME,harness.state.get('run_id')))
             if route.path=='/api/sortie-report':return self.send_json(replay.report(replay.run_folder(RUNTIME,query.get('run',[''])[0]),int(query.get('sortie',['0'])[0])))
             if route.path=='/api/replay':return self.send_json(replay.get_replay(RUNTIME,query.get('run',[''])[0],int(query.get('sortie',['0'])[0]),NODE,ROOT/'sortie.mjs',node_path(ROOT/'sortie.mjs')))
@@ -398,6 +437,7 @@ class Handler(SimpleHTTPRequestHandler):
             if not 0<length<=1000000:raise ValueError('Invalid request size')
             body=json.loads(self.rfile.read(length))
             if self.path=='/api/start':return self.send_json(harness.start(body))
+            if self.path=='/api/environment':return self.send_json(harness.update_environment(body))
             if self.path=='/api/review':return self.send_json(harness.review(body))
             if self.path=='/api/resume':return self.send_json(harness.resume(body))
             if self.path=='/api/stop':harness.stop();return self.send_json({'ok':True})

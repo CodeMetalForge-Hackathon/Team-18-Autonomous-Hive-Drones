@@ -7,7 +7,7 @@ const replayFrames=[];
 const frames=[],capacity=65536;let used=0,dropped=0,left=false,tick=0;
 const emit=value=>process.stdout.write(JSON.stringify(value)+'\n');
 function record(){const row={t:+sim.t.toFixed(2),readings:Object.fromEntries(Object.entries(sim.readings).map(([k,v])=>[k,+v.toFixed(4)])),commands:{...sim.cmd}};const size=Buffer.byteLength(JSON.stringify(row));frames.push(row);used+=size;while(used>capacity){used-=Buffer.byteLength(JSON.stringify(frames.shift()));dropped++}}
-function snapshot(){return{robot:sim.robot,t:sim.t,energy:sim.energy,readings:sim.readings,cmd:sim.cmd,found:[...sim.found],distance:sim.distance,collisions:sim.collisions,path:sim.path.slice(-1200),c:sim.c,status:sim.status}}
+function snapshot(){return{robot:sim.robot,t:sim.t,energy:sim.energy,readings:sim.readings,cmd:sim.cmd,found:[...sim.found],distance:sim.distance,collisions:sim.collisions,path:sim.path.slice(-1200),c:sim.c,status:sim.status,head:sim.head?{...sim.head}:null,sensorPose:sim.ping?{x:sim.ping.world_x,y:sim.ping.world_y,a:sim.ping.world_a}:null}}
 function remember(){const {path,c,...frame}=snapshot();replayFrames.push(structuredClone(frame));}
 record();remember();if(!job.replay)emit({type:'frame',state:snapshot()});
 const speed=Math.max(1,Math.min(100,job.speed||8));const batch=Math.max(1,Math.round(speed));

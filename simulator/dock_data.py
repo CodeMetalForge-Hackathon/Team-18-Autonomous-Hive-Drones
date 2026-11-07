@@ -27,7 +27,7 @@ def calculate(expression):
 def project_ranges(root,files=None,cell_cm=5):
     root=pathlib.Path(root).resolve();cell=float(cell_cm)
     if not 2<=cell<=20:raise ValueError('Cell size must be 2..20 cm')
-    hardware=json.loads((root/'hardware.json').read_text());reach=hardware['range_max_cm'];noise=hardware['range_uniform_noise_cm'];occupied={};free={};bearings=[];sample_count=0;used=[]
+    hardware=json.loads((root/'hardware.json').read_text());reach=hardware['range_max_cm'];noise=hardware['range_uniform_noise_cm'];occupied={};free={};bearings=[];sample_count=0;used=[];light_samples=[];seen_pings=set()
     files=files if files is not None else [str(p.relative_to(root)) for p in sorted((root/'observations').glob('*.json'))]
     if len(files)>50:raise ValueError('At most 50 delivered logs per call')
     def key(x,y):return(round(x/cell)*cell,round(y/cell)*cell)
@@ -37,15 +37,21 @@ def project_ranges(root,files=None,cell_cm=5):
         log=json.loads(p.read_text());used.append(name)
         for row in log['samples']:
             s=row['readings'];x,y,yaw=s['odom_x'],s['odom_y'],s['yaw'];sample_count+=1
-            for label,offset in [('front',0),('left',-90),('right',90)]:
-                d=max(0,min(reach,s[label]));a=math.radians(yaw+offset);dx,dy=math.cos(a),math.sin(a)
+            if 'light' in s and (not light_samples or light_samples[-1]['file']!=name or row['t']-light_samples[-1]['t']>=1 or abs(s['light']-light_samples[-1]['light'])>.08):light_samples.append({'file':name,'t':row['t'],'x':round(x,2),'y':round(y,2),'light':s['light']})
+            if 'range' in s:
+                ping=(name,s.get('range_seq',row['t']))
+                rays=[] if not s.get('range_valid') or ping in seen_pings else [(s['range'],s.get('range_x',x),s.get('range_y',y),s.get('range_yaw',yaw)+s.get('range_angle',s.get('pan',0)))]
+                seen_pings.add(ping)
+            else:rays=[(s[label],x,y,yaw+offset) for label,offset in [('front',0),('left',-90),('right',90)]]
+            for distance,origin_x,origin_y,angle in rays:
+                d=max(0,min(reach,distance));a=math.radians(angle);dx,dy=math.cos(a),math.sin(a)
                 if d<reach-max(1,noise*2):
-                    endpoint=key(x+d*dx,y+d*dy);occupied[endpoint]=occupied.get(endpoint,0)+1
+                    endpoint=key(origin_x+d*dx,origin_y+d*dy);occupied[endpoint]=occupied.get(endpoint,0)+1
                 step=cell
                 while step<d-cell:
-                    point=key(x+step*dx,y+step*dy);free[point]=free.get(point,0)+1;step+=cell
+                    point=key(origin_x+step*dx,origin_y+step*dy);free[point]=free.get(point,0)+1;step+=cell
             if s.get('target') and (not bearings or row['t']-bearings[-1]['t']>1 or bearings[-1]['file']!=name):
                 bearings.append({'file':name,'t':row['t'],'x':round(x,1),'y':round(y,1),'heading_deg':round(yaw,1),'bearing_deg':round(s['bearing']*hardware['camera_fov_deg']/2,1)})
     occ=[{'x':x,'y':y,'hits':hits} for (x,y),hits in sorted(occupied.items(),key=lambda p:-p[1])[:2000]]
     fr=[{'x':x,'y':y,'passes':passes} for (x,y),passes in sorted(free.items(),key=lambda p:-p[1]) if (x,y) not in occupied][:2000]
-    return {'frame':'dock-relative-cm','method':'range rays transformed only by logged command-integrated odometry; drift, collisions and sensor noise remain','cell_cm':cell,'files':used,'sample_count':sample_count,'occupied':occ,'free':fr,'target_bearings':bearings[:100],'warning':'Candidate point cloud only. Not true geometry. Maximum-range rays do not establish an occupied endpoint; height and occlusion ambiguity remain.'}
+    return {'frame':'dock-relative-cm','method':'range rays transformed only by logged command-integrated odometry; drift, collisions and sensor noise remain','cell_cm':cell,'files':used,'sample_count':sample_count,'occupied':occ,'free':fr,'target_bearings':bearings[:100],'light_samples':light_samples[-200:],'warning':'Candidate point cloud only. Not true geometry. Maximum-range rays do not establish an occupied endpoint; height and occlusion ambiguity remain. Swept sonar uses each ping’s stored pose and angle; cone width makes endpoints uncertain. Invalid/no-echo samples do not establish free space. Low light is evidence only, not proof of concealment.'}

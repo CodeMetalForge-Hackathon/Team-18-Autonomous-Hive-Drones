@@ -4,7 +4,7 @@ Hardware: M5StickC Plus SE (ESP32-PICO-D4) on the RoverC Pro base. Windows USB p
 
 ## Tabletop simulator
 
-[simulator/](simulator/README.md) contains a local 3D tabletop rover simulator, editable arenas, bounded controller ROMs, and an automatic Claude Code Opus → sortie → dock → observation → revised ROM loop. Continuous replay includes archived maps, published debriefs and ROM diffs. The simulator is separate from physical motor control; simulated sensor/odometry assumptions are not hardware measurements.
+[simulator/](simulator/README.md) contains a local 3D tabletop rover simulator, editable arenas, bounded controller ROMs, and an automatic Claude Code Opus → sortie → dock → observation → revised ROM loop. The photo-based profile has one panning ultrasonic module and a top light sensor; range/servo/light parameters remain uncalibrated assumptions. Continuous replay includes archived maps, published debriefs and ROM diffs. A [minimal mission-supervisor screen](simulator/supervisor.html) shows agent beliefs and subtitle-length findings, plans and ROM-change reports. The simulator is separate from physical motor control; simulated sensor/odometry assumptions are not hardware measurements.
 
 ```bash
 cd simulator

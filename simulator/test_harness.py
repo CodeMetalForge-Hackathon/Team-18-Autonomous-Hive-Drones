@@ -117,6 +117,18 @@ jmp loop
                 with patch.object(h,'plan',plan),patch.object(h,'sortie',side_effect=AssertionError('Review must not deploy')):
                     h.review();h.thread.join(5)
                 self.assertEqual(calls,[(2,True)]);self.assertFalse(h.state['active']);self.assertEqual(h.state['phase'],'limit');self.assertEqual(list(h.run.glob('deployment-*.json')),[])
+    def test_single_panning_channel_uses_ping_pose_not_current_pose(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=pathlib.Path(tmp);(root/'observations').mkdir();(root/'hardware.json').write_text(json.dumps(server.public_hardware(CONFIG)))
+            reading={'odom_x':100,'odom_y':100,'yaw':-90,'range':20,'range_valid':1,'range_seq':1,'range_x':5,'range_y':7,'range_yaw':0,'range_angle':90,'light':.12,'target':0}
+            rows=[{'t':0,'readings':reading},{'t':.1,'readings':{**reading,'odom_x':200}},{'t':.2,'readings':{**reading,'range_seq':2,'range_valid':0,'range':-1}}]
+            (root/'observations/test.json').write_text(json.dumps({'samples':rows}));result=dock_data.project_ranges(root,cell_cm=5)
+            self.assertEqual(result['occupied'],[{'x':5.0,'y':25.0,'hits':1}]);self.assertTrue(result['light_samples']);self.assertEqual(result['light_samples'][0]['light'],.12)
+    def test_photo_contract_has_no_fixed_range_or_camera_defaults(self):
+        contract=server.public_hardware(CONFIG);self.assertEqual(contract['range_sensor_mount']['channels'],1);self.assertFalse(contract['camera']);self.assertFalse(contract['bumper_sensor']);self.assertFalse(contract['virtual_rescue_detector']);self.assertIn('provisional',contract['calibration_status'])
+        with self.assertRaises(ValueError):server.node_validate('sense r0 front',64)
+        self.assertTrue(server.node_validate('sense r0 front',64,profile=server.LEGACY_PROFILE)['ok'])
+        with self.assertRaises(ValueError):server.hardware({'range':5,'rangeMin':5})
     def test_invalid_start_and_config(self):
         with self.assertRaises(ValueError):server.validate_map({**WORLD,'start':{'x':1000,'y':50,'a':0}})
         with self.assertRaises(ValueError):server.hardware({'speed':float('inf')})

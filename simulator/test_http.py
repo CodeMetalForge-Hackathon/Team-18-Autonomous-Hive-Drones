@@ -1,5 +1,5 @@
 """Local HTTP boundaries; never launches Claude or a rover sortie."""
-import http.client, threading, unittest
+import http.client, threading, unittest, json
 from http.server import ThreadingHTTPServer
 from server import Handler
 class HttpBoundaryTests(unittest.TestCase):
@@ -15,6 +15,8 @@ class HttpBoundaryTests(unittest.TestCase):
         c.request(method,path,body=body,headers=headers);r=c.getresponse();status=r.status;r.read();c.close();return status
     def test_local_page_and_status(self):
         self.assertEqual(self.request('/'),200);self.assertEqual(self.request('/api/status'),200)
+    def test_supervisor_route_excludes_observer_truth(self):
+        c=http.client.HTTPConnection('127.0.0.1',self.port,timeout=5);c.request('GET','/api/supervisor');response=c.getresponse();self.assertEqual(response.status,200);data=json.loads(response.read());c.close();self.assertNotIn('world',data);self.assertNotIn('frame',data);self.assertNotIn('config',data);self.assertLessEqual(len(data['reports']),3)
     def test_unexpected_host_rejected_for_reads_and_controls(self):
         self.assertEqual(self.request('/api/status',host=f'other.example:{self.port}'),403);self.assertEqual(self.request('/api/start','POST',host=f'other.example:{self.port}'),403)
     def test_cross_origin_control_rejected(self):self.assertEqual(self.request('/api/start','POST',origin='https://other.example'),403)

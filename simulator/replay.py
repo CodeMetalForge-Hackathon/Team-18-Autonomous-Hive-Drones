@@ -1,4 +1,5 @@
 """Read-only observer history. Never exposed to the agent's file tools."""
+from runtime import node_script_path
 import copy, difflib, functools, json, pathlib, re, subprocess
 
 @functools.lru_cache(maxsize=256)
@@ -54,8 +55,10 @@ def history(root,current=None):
     return {'runs':runs,'current_run':current}
 
 @functools.lru_cache(maxsize=64)
-def reconstruct(job_path,job_mtime,return_path,return_mtime,engine_mtime,worker_mtime,node,worker_path):
-    job=load(pathlib.Path(job_path));job={**job,'replay':True,'speed':100}
+def reconstruct(job_path,job_mtime,return_path,return_mtime,engine_mtime,worker_mtime,node,worker_path,legacy_worker_path):
+    job=load(pathlib.Path(job_path));
+    if 'sensorModel' not in job['config'] or job['config']['sensorModel']=='legacy-three-ray-v1':worker_path=legacy_worker_path
+    job={**job,'replay':True,'speed':100}
     proc=subprocess.run([node,worker_path],input=json.dumps(job),text=True,capture_output=True,timeout=30)
     if proc.returncode:raise ValueError('Replay reconstruction failed: '+proc.stderr[:500])
     end=json.loads(proc.stdout.splitlines()[-1]);saved=load(pathlib.Path(return_path));a,b=end['state'],saved['state']
@@ -71,8 +74,8 @@ def get_replay(root,run_id,number,node,worker,worker_path):
     job=load(job_path);end=load(end_path);recorded=end.get('replay_frames')
     if recorded:frames=recorded;source='recorded'
     else:
-        frames=reconstruct(str(job_path),job_path.stat().st_mtime_ns,str(end_path),end_path.stat().st_mtime_ns,(worker.parent/'engine.mjs').stat().st_mtime_ns,worker.stat().st_mtime_ns,node,worker_path);source='verified reconstruction'
-    return {'run_id':run_id,'world':job['map'],'config':{**job['config'],'missionMode':True},'frames':frames,'source':source,'report':report(folder,number),'dock_timeline':dock_timeline(folder,number)}
+        frames=reconstruct(str(job_path),job_path.stat().st_mtime_ns,str(end_path),end_path.stat().st_mtime_ns,(worker.parent/'engine.mjs').stat().st_mtime_ns,worker.stat().st_mtime_ns,node,worker_path,node_script_path(worker.parent/'legacy/sortie-v1.mjs',node));source='verified reconstruction'
+    return {'run_id':run_id,'world':job['map'],'config':{**job['config'],'sensorModel':job['config'].get('sensorModel','legacy-three-ray-v1'),'missionMode':True},'frames':frames,'source':source,'report':report(folder,number),'dock_timeline':dock_timeline(folder,number)}
 
 def dock_timeline(folder,number):
     """Published events and actual file snapshots from planning turn N+1, never thinking blocks."""

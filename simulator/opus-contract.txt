@@ -15,9 +15,12 @@ The helper writes analysis-result.json in about 0.1 seconds. Read that file; if 
 For arithmetic use {"id":"unique-id","operation":"calculate","expression":"20*cos(45)"}. Allowed operations are numeric +,-,*,/,%, bounded powers, abs, sqrt, min, max, sin, cos, atan2 and pi. Angles use degrees. No arbitrary code is executed. analysis-result.json is a derived-data helper output, not a live sensor channel. The helper runs only during planning at the dock.
 
 TASK
-Investigate the unknown reachable environment, progressively map it, and locate/confirm rescue markers while reliably returning to the dock. Marker count is unknown. Favor short safe sorties at first. A productive returned observation is more valuable than an ambitious stranded rover. Keep improving your map and strategy from evidence. Completion is your explicit judgment, not knowledge of hidden target totals.
+Investigate the unknown reachable environment, progressively map it, and identify possible shelter while reliably returning to the dock. Use falling light plus measured local geometry, then stop and take repeated light/range samples to test a hiding hypothesis. Low light alone does not establish concealment from an observer. Do not claim an oracle hidden state. Rescue markers are a separate virtual game option; without an explicitly enabled detector you cannot recognize or confirm them. The photographed robot has no RGB camera, bumper switches or marker detector in its default profile. Marker count is unknown. Favor short safe sorties at first. A productive returned observation is more valuable than an ambitious stranded rover. Keep improving your map and strategy from evidence. Completion is your explicit judgment, not knowledge of hidden target totals.
 
 FILES TO UPDATE BEFORE FINISHING EACH CALL
+supervisor.json: REQUIRED subtitle reports for the mission supervisor. Exactly 3 reports, one of each kind; each text is a complete short sentence of AT MOST 72 characters and 12 words, with no newline. Avoid jargon and coordinates unless essential. Do not output a list of paragraphs for this view.
+{"observed_sortie":1,"reports":[{"kind":"learned","text":"The old route is blocked; its map entry needs revision.","confidence":"revised"},{"kind":"plan","text":"Probe the alternate opening, then return with fresh readings.","confidence":"uncertain"},{"kind":"rom","text":"Add clearance checks and slow the rover near uncertain cells.","confidence":"observed"}]}
+Use observed_sortie:null initially. confidence is observed, uncertain or revised. LEARNED must report evidence and distinguish an observation from a hypothesis. PLAN states what happens next. ROM states how the actual controller changes. Keep all 3 synchronized with the detailed debrief and real code. These captions are shown one at a time, at subtitle pace, at most two lines on screen. A revised belief must be called out clearly in LEARNED.
 debrief.json: a concise published debrief for the latest delivered sortie. Required format:
 {"observed_sortie":1,"learned":["Evidence-backed finding, citing a log/sample when useful"],"uncertainties":["What remains unknown or uncertain"],"next_plan":"Concrete next outing and return strategy","rom_changes":[{"change":"Specific controller change from the previous ROM","why":"How the evidence justifies it"}],"evidence":["observations/sortie-001.json: measurements supporting the plan"]}
 Use observed_sortie:null on the first turn and explicitly say there is no environmental evidence yet. All lists must be present; learned and uncertainties contain 1..12 short strings, rom_changes contains at most 12 change/why objects, evidence contains at most 12 short strings. next_plan is required even if the decision is to finish: explain why. Do not present guesses as observations. This is your concise explanation for the human replay, not private chain-of-thought. Write it before ending every dock turn and keep it synchronized with the actual ROM changes.
@@ -48,26 +51,41 @@ rand r0            ; deterministic pseudorandom -1..1
 jz r0 label
 jnz r0 label
 jmp label
+pan -30            ; move head to −30 degrees and hold; cancel sweep
+sweep 30           ; continuously oscillate at 30 degrees/second
+sweep 0            ; stop sweep and hold current head angle
 move 0.5
 strafe 0
 turn -0.5
 yield
 
 Sensors:
-front, left, right: noisy range in cm at heading, heading-90°, heading+90°. Values at maximum range indicate no measured obstacle within reach. A body can collide even when a thin center ray is clear.
+range: one ultrasonic measurement in cm, or -1 for invalid/no echo. Two visible transducers are ONE transmit/receive pair, not two independent ranges. No fixed front/left/right channels exist. The beam covers a small cone; it reports a closest sampled reflector, not a precise point on the beam center.
+range_valid: 1 for a usable echo, 0 for no echo/out-of-range/inside the blind zone. Invalid means unknown, NOT clear space.
+range_angle: estimated head angle AT THE LAST PING, relative to forward (negative left, positive right).
+range_age, range_time, range_seq: seconds since ping, time of ping, monotonically increasing ping counter. Check freshness and do not count the same ping as new evidence.
+range_x, range_y, range_yaw: estimated dock-relative sensor origin and chassis heading AT THE PING, computed from commanded odometry and known mount offsets; NOT true position. Use these plus range_angle when mapping. Current odometry/pan can differ if the robot/head has moved since the ping.
+pan: current estimated servo angle, not independent encoder feedback. The nominal travel is ±45° (90° total), configurable because it is not calibrated. The head slews at a finite rate. pan_ready is 1 only when holding at the requested angle, 0 while moving/sweeping. Echoes can still be sampled during sweeps; each records its own angle.
+light: normalized upward-facing illumination reading 0..1, not calibrated lux. It falls under roofs/boxes, but ambient darkness, light leakage and noise can produce similar readings. There is NO hidden/shelter flag. Compare against an exposed baseline and verify over time, together with geometry and the observer model if one exists.
+Commands pan DEG move-and-hold; sweep DEG_PER_SECOND oscillates between mechanical limits and reverses at the ends. Repeating the same sweep command preserves its phase/direction. pan cancels sweep; sweep 0 holds the current angle. Pan and translation can operate simultaneously. Hardware reach, blind zone, beam width, head speed and light response are provisional assumptions in hardware.json; do not treat them as measured product specifications.
+The horizontal sonar does NOT detect tabletop edges or very low laptop bases below its height; it can see the raised laptop screen. The simulator blocks falls for testing, but that guard does not generate an echo. Do not infer an invisible cliff from a made-up range wall. Physical drop protection is not provided by this sensor configuration.
 target: 0/1, camera sees an unconfirmed rescue marker (if camera installed).
 bearing: camera bearing normalized -1..1 across half of camera FOV; multiply by FOV/2 for degrees. No marker identity or global position.
 observer: 0/1 camera sees the observer marker (if any). Not an omniscient observer detection.
-bumper: contact on the previous tick.
+bumper: available ONLY when hardware.json says bumper_sensor:true; otherwise always 0 because no physical switches were observed. Collision statistics visible to the human are not a rover sensor.
 battery: remaining fraction 0..1. Energy budget is synthetic; baseline 1 unit/sec + translation/turn cost.
 time: seconds since departure.
 odom_x, odom_y: onboard open-loop dead reckoning in cm relative to dock. It integrates commanded motions with small drift, NOT true position; impacts can cause error. No encoders or global localization.
 yaw: estimated heading relative to departure orientation in degrees [-180,180]. Integrates commanded turn with drift; NOT a true compass.
 dock: 1 only while the rover is physically within 6 cm of the dock center, 0 otherwise. A local electrical/contact surrogate, NOT a long-range homing beacon.
-rescued: cumulative local close-range confirmations since this experiment began. A confirmation occurs within 10 cm with clear sight. It reports no hidden total.
+rescued: cumulative local confirmations ONLY if virtual_rescue_detector is explicitly enabled; otherwise always 0. It is a simulator game abstraction, not photographed hardware. A confirmation occurs within 10 cm with clear sight. It reports no hidden total.
 
 RETURN AND RECORDING
 An outing must leave the dock vicinity (>10 cm true distance, also observable approximately in odometry), then return within 6 cm for upload. The dock detector is available throughout. Docking stops movement, recharges and restores the departure orientation before the next sortie. All this happens only at the physical dock. The dock firmware does not navigate home for you. Account for odometry uncertainty and bumper contacts when navigating. Avoid letting an early yield preserve a forward command into your return/stop state. The logger samples at 5 Hz into a bounded 64 KiB flash ring, so long runs discard oldest samples. You cannot access that buffer until docked. The log contains readings, dead reckoning, commands and local confirmation events; NEVER true pose or the environment map. Each return gets a numbered immutable observation file. Log drop count and hardware contract are supplied. There is no live preview or test tool for the unknown world.
 
 REVIEW AT A SORTIE LIMIT
 The harness may request a review-only dock turn after the last allowed outing. Analyze the new log, update the map, publish debrief.json and notes, and prepare the next controller/mission if useful. The harness will archive your plan but will NOT deploy it in review-only mode. Do not declare the rescue solved just because the sortie cap was reached.
+
+CHANGING ENVIRONMENTS AND REVISABLE MAPS
+The environment may change between outings without a special notification. A map is a belief, never ground truth. Re-measure important clearances before trusting an old route. Differentiate a correction of an earlier estimate, evidence that an object moved, and an unresolved conflict. No echo is unknown, not proof that a former obstacle vanished. Verify contradictions with fresh pings, known head angle and pose uncertainty; compare multiple angles/samples before removing an obstacle.
+Add a monotonically increasing revision to map.json. Stamp each occupied/free/landmark point with last_seen_sortie, confidence (0..1), and status (observed, uncertain, or revised). Fade or explicitly mark stale/unverified cells and retain source evidence references. Do not carry old free-space certainty indefinitely. map.json may contain changes:[{"type":"revised","x":12,"y":4,"reason":"Fresh returns contradict the older estimate","evidence":["observations/sortie-002.json"]}], using added, revised, removed or conflict. Keep changes compact and evidence-based. If the map changes, explain the resulting plan and ROM changes in supervisor.json and debrief.json. Do not invent knowledge of layout edits or privileged world coordinates.
