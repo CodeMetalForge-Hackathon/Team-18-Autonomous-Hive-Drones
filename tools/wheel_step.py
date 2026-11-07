@@ -41,6 +41,7 @@ def wheel_step(port, speeds, duration_ms, ramp_ms=0):
         read_for(link, 2)
         link.write(b"DISARM\nSTATUS\n")
         status = read_for(link, 0.3)
+        report['status_before'] = status
         if "connected=1" not in status or "moving=0" not in status:
             raise RuntimeError("Rover not ready: "+status)
         link.write(b"ARM\n")
@@ -69,6 +70,7 @@ def wheel_step(port, speeds, duration_ms, ramp_ms=0):
         link.write(b"STOP\nDISARM\nSTATUS\n")
         report["stopped_unix_ms"] = time.time()*1000
         status = read_for(link, 0.4)
+        report['status_after'] = status
         acknowledged = acknowledged or "DRIVING" in status
         if not acknowledged:
             raise RuntimeError("No wheel command was acknowledged")
@@ -82,8 +84,13 @@ def wheel_step(port, speeds, duration_ms, ramp_ms=0):
         raise TrialError(str(error), report) from error
     finally:
         try:
-            link.write(b"DISARM\n")
-            time.sleep(0.05)
+            link.write(b"DISARM\nSTATUS\n")
+            final_status = read_for(link, 0.3)
+            report['final_status'] = final_status
+            if 'moving=0' in final_status and 'armed=0' in final_status:
+                report['stopped_disarmed'] = True
+        except Exception as error:
+            report['final_status_error'] = str(error)
         finally:
             link.close()
 

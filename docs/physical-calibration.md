@@ -84,3 +84,41 @@ The next physical calibration depends on a stable base power/connection check.
 It should compare repeated pulses and ramps at comparable displacement, then
 fit wheel compensation using only successful trials. Precise, smooth control
 has **not** yet been established.
+
+## Subsequent diagnostics and controller learning
+
+After the table was rearranged, the updated firmware's zero-speed checks passed.
+Its error counter reported one I2C timeout (code 5) from an earlier write. The
+following four independent wheel pulses and forward trials added no errors.
+Final motor status was stopped/disarmed after every trial. Register numbers
+below are zero based, as in the low-level API.
+
+| Pulse at speed 40 | Duration | Change x | Change y | Change image heading |
+|---|---:|---:|---:|---:|
+| Register 0 only | 250 ms | -0.03 px | -0.01 px | -0.16° |
+| Register 1 only | 250 ms | +0.27 px | -0.62 px | -1.07° |
+| Register 2 only | 250 ms | -0.35 px | -4.19 px | +7.51° |
+| Register 3 only | 250 ms | +1.20 px | +1.27 px | -0.03° |
+
+These measure chassis motion with the other wheels stationary, not unloaded
+wheel speed; they do not establish that a particular motor is broken. The
+responses are too uneven to assume identical motor gains.
+
+| Forward wheel speeds | Duration / ramps | Change x | Change y | Heading change |
+|---|---|---:|---:|---:|
+| 40,40,40,40 | 400 ms / none | +14.44 px | -3.24 px | -7.00° |
+| 40,40,40,40 | 500 ms / 100 ms each end | +35.91 px | -28.25 px | -25.39° |
+| 40,38,40,38 | 500 ms / 100 ms each end | +19.23 px | -11.34 px | -19.52° |
+| 40,35,40,35 | 500 ms / 100 ms each end | +23.54 px | -20.55 px | -27.60° |
+
+A simple fixed pairwise trim and ramp do not yet provide predictable straight
+travel. These are different positions on the table, with different tether
+forces, and are single samples. Do not claim the ramp improved smoothness from
+these endpoint measurements.
+
+The learned Q-turn controller performed better: two camera-selected correction
+pulses (230 and 180 ms) reached their -5° image-heading target with residuals
+of 0.70° and 0.54°. `calibration/turn_samples.json` preserves eight successful
+turn measurements; `visual_heading.py` learns its median angular rate from that
+data rather than embedding an unexplained constant. This remains an
+external-supervision calibration tool, not camera input to the onboard agent.

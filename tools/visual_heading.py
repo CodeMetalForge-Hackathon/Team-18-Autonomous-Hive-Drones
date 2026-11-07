@@ -22,9 +22,10 @@ from supervised_step import step
 from camera_shared import CONFIG, snapshot
 
 
-# Independently inspected camera measurements; see physical-calibration.md.
-Q_SAMPLES = [(200, 22.33), (300, 33.59), (150, 22.87), (180, 25.22), (120, 13.69)]
-Q_GAIN = statistics.median(degrees / ms for ms, degrees in Q_SAMPLES)
+# Independently inspected measurements, preserved with provenance in the repo.
+CALIBRATION = json.loads((Path(__file__).resolve().parents[1]/'calibration'/'turn_samples.json').read_text())
+Q_GAIN = statistics.median(sample['delta_degrees']/sample['duration_ms']
+                           for sample in CALIBRATION['samples'])
 
 
 def proposal(heading, target, tolerance=5):
@@ -41,7 +42,8 @@ def proposal(heading, target, tolerance=5):
     if not 60 <= ms <= 250:
         raise ValueError("Correction outside the calibrated 60–250 ms step limit")
     return {"action": "Q", "speed": 40, "milliseconds": ms,
-            "error_degrees": error, "gain_degrees_per_ms": Q_GAIN}
+            "error_degrees": error, "gain_degrees_per_ms": Q_GAIN,
+            "calibration_samples":len(CALIBRATION['samples'])}
 
 
 def capture(executable, folder, environment, box, heading):

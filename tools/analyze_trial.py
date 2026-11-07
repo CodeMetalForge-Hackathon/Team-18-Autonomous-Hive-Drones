@@ -1,6 +1,7 @@
 """Extract board pose throughout a camera-recorded wheel trial, in image units."""
 import argparse
 import json
+import re
 from pathlib import Path
 import numpy as np
 from PIL import Image
@@ -12,6 +13,10 @@ def analyze(folder, box, heading):
     trial = json.loads((folder/'trial.json').read_text())
     if trial.get('error') or not trial.get('stopped_disarmed'):
         raise ValueError('Faulted or unverified trial cannot be used for calibration')
+    counts = [int(match.group(1)) for key in ('status_before','status_after','final_status')
+              for match in [re.search(r'MOTOR_DIAG error_count=(\d+)', trial.get(key,''))] if match]
+    if counts and counts[-1] > counts[0]:
+        raise ValueError('Motor error count increased; exclude this trial from calibration')
     trajectory = []
     for sample in sorted(folder.glob('sample-*'), key=lambda p:int(p.name.split('-')[1])):
         metadata = json.loads((sample/'frame-1.json').read_text())
@@ -35,7 +40,11 @@ def analyze(folder, box, heading):
               'delta': (after-before).tolist(), 'units': '[image x pixels, y pixels, heading degrees]',
               'trajectory': trajectory}
     (folder/'trajectory.json').write_text(json.dumps(result, indent=2))
-    print(json.dumps({k:v for k,v in result.items() if k!='trajectory'}, indent=2))
+    print(json.dumps({'source':str(folder), 'speeds':trial['speeds'],
+                     'duration_ms':trial['duration_ms'], 'ramp_ms':trial['ramp_ms'],
+                     'frames':len(trajectory), 'before':result['before'],
+                     'after':result['after'], 'delta':result['delta'],
+                     'motor_errors_added':counts[-1]-counts[0] if counts else None}, indent=2))
     return result
 
 

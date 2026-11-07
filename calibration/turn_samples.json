@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "direction": "Q",
+  "speed": 40,
+  "units": "clockwise image degrees and milliseconds; not physical yaw",
+  "conditions": "RoverC Pro on this tabletop, USB tether attached, external board-axis tracker",
+  "samples": [
+    {"id": "q-200", "duration_ms": 200, "delta_degrees": 22.33},
+    {"id": "q-300", "duration_ms": 300, "delta_degrees": 33.59},
+    {"id": "correct-q-150", "duration_ms": 150, "delta_degrees": 22.87},
+    {"id": "correct-q-180", "duration_ms": 180, "delta_degrees": 25.22},
+    {"id": "repeat-q-120", "duration_ms": 120, "delta_degrees": 13.69},
+    {"id": "20261107-142525-41431f10", "duration_ms": 160, "delta_degrees": 15.78},
+    {"id": "20261107-144832-e33e57a9", "duration_ms": 230, "delta_degrees": 26.75},
+    {"id": "20261107-144914-724f7a21", "duration_ms": 180, "delta_degrees": 20.66}
+  ]
+}
