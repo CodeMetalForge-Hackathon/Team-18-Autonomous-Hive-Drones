@@ -2,6 +2,17 @@
 
 Hardware: M5StickC Plus SE (ESP32-PICO-D4) on the RoverC Pro base. Windows USB port: COM5 on the development computer.
 
+## Tabletop simulator
+
+[simulator/](simulator/README.md) contains a local 3D tabletop rover simulator, editable arenas, bounded controller ROMs, and an automatic Claude Code Opus → sortie → dock → observation → revised ROM loop. Continuous replay includes archived maps, published debriefs and ROM diffs. The simulator is separate from physical motor control; simulated sensor/odometry assumptions are not hardware measurements.
+
+```bash
+cd simulator
+python3 server.py
+```
+
+Open http://localhost:8765. Python 3.10+, Node.js and an authenticated recent Claude Code CLI are required for automatic Opus experiments; manual simulation does not call a model. Local recordings and credentials are excluded from Git. See the simulator's [public-repository notes](simulator/README.md#public-repository-and-local-data) and [third-party notices](simulator/THIRD_PARTY_NOTICES.md).
+
 ## Wireless control
 
 The M5Stick creates a WPA2-protected Wi-Fi network whose name and generated password appear on its screen. Join that network from a phone or laptop, then open **http://192.168.4.1**. No router or internet service is required. The password is saved on the device across reboots, not in this repository; USB serial command `WIFI` prints connection information.

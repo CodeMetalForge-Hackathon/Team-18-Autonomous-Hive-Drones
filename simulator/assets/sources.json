@@ -1,0 +1,55 @@
+{
+  "repository": "https://github.com/m5stack/M5_Hardware",
+  "commit": "ec351c516644b44defc145728cc029ced77381ff",
+  "note": "Official structural STL parts; not a complete assembled robot. Original upstream licensing applies.",
+  "files": [
+    {
+      "file": "StickC-Plus.stl",
+      "source": "https://raw.githubusercontent.com/m5stack/M5_Hardware/ec351c516644b44defc145728cc029ced77381ff/Products/K016-P_StickC-Plus/Structures/StickC-Plus.stl",
+      "bytes": 616284,
+      "sha256": "56dcfd382032d177ea049f890f59db965a56c161a8db588e80dd45e66576685a"
+    },
+    {
+      "file": "RoverC-Pro_L_Part.stl",
+      "source": "https://raw.githubusercontent.com/m5stack/M5_Hardware/ec351c516644b44defc145728cc029ced77381ff/Products/K036-B_RoverC-Pro/Structures/RoverC-Pro_L_Part.stl",
+      "bytes": 75284,
+      "sha256": "9be66e385d08e06906b1fcb1f3c959c0a7e92098bb5c464bd75bc23bc2040493"
+    },
+    {
+      "file": "RoverC-Pro_Servo_Clamp_Support_Bracket.stl",
+      "source": "https://raw.githubusercontent.com/m5stack/M5_Hardware/ec351c516644b44defc145728cc029ced77381ff/Products/K036-B_RoverC-Pro/Structures/RoverC-Pro_Servo_Clamp_Support_Bracket.stl",
+      "bytes": 617584,
+      "sha256": "a0d042cb78eb1c0b4389622777ae98a663ef9d76a6a3eb99c0d5c7f74d6ca7db"
+    },
+    {
+      "file": "RoverC-Pro_Servo_Claw_B-Type_Front_Shell.stl",
+      "source": "https://raw.githubusercontent.com/m5stack/M5_Hardware/ec351c516644b44defc145728cc029ced77381ff/Products/K036-B_RoverC-Pro/Structures/RoverC-Pro_Servo_Claw_B-Type_Front_Shell.stl",
+      "bytes": 295484,
+      "sha256": "dccc98f3c3189ef9af67a70b977a3a756859fd2714401c9dd75f46c421397751"
+    },
+    {
+      "file": "RoverC-Pro_Servo_Claw_B_Version_Left_Arm.stl",
+      "source": "https://raw.githubusercontent.com/m5stack/M5_Hardware/ec351c516644b44defc145728cc029ced77381ff/Products/K036-B_RoverC-Pro/Structures/RoverC-Pro_Servo_Claw_B_Version_Left_Arm.stl",
+      "bytes": 574184,
+      "sha256": "cb002a092744b170e27bb36bc4cee5f8ac24e39879c7fc6fd95215c244fce357"
+    },
+    {
+      "file": "RoverC-Pro_Servo_Claw_B_Version_Right_Arm.stl",
+      "source": "https://raw.githubusercontent.com/m5stack/M5_Hardware/ec351c516644b44defc145728cc029ced77381ff/Products/K036-B_RoverC-Pro/Structures/RoverC-Pro_Servo_Claw_B_Version_Right_Arm.stl",
+      "bytes": 569884,
+      "sha256": "4dbf1e14a2f02f837876ec1fd6e899d25eb0e0b6ecdf385332fd25c607f0fe21"
+    },
+    {
+      "file": "RoverC-Pro_Servo_Kit_Building_Block_Pendant-A.stl",
+      "source": "https://raw.githubusercontent.com/m5stack/M5_Hardware/ec351c516644b44defc145728cc029ced77381ff/Products/K036-B_RoverC-Pro/Structures/RoverC-Pro_Servo_Kit_Building_Block_Pendant-A.stl",
+      "bytes": 476484,
+      "sha256": "750689a6599692084d8046fcde499dbdcdebd506db704730fd3d82130c974573"
+    },
+    {
+      "file": "RoverC-Pro_Shell.stl",
+      "source": "https://raw.githubusercontent.com/m5stack/M5_Hardware/ec351c516644b44defc145728cc029ced77381ff/Products/K036-B_RoverC-Pro/Structures/RoverC-Pro_Shell.stl",
+      "bytes": 660984,
+      "sha256": "4a1df4b3e0706636477d1436bbcf63c680d5377a95de0409603293a0824e7a4a"
+    }
+  ]
+}
