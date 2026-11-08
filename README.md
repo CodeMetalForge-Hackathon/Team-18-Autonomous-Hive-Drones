@@ -7,9 +7,9 @@
 </p>
 <p align="center"><em>Our test arena. One palm-sized rover, a cardboard tunnel, two rooms, and a scatter of obstacles it knows nothing about when it starts.</em></p>
 
-<!-- Demo video: add the 10 to 20 second clip here. -->
+https://github.com/user-attachments/assets/1d8b4193-4a30-4efb-a570-51ab36145b51
 
-[Watch the development timelapse](docs/rover-timelapse.mp4) — 20 hours of recorded footage condensed into 90 seconds (MP4, 46 MB).
+20 hours of recorded footage condensed into 90 seconds. [Download the MP4](docs/rover-timelapse.mp4) (46 MB).
 
 ## The problem
 
