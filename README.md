@@ -2,6 +2,11 @@
 
 **Small, cheap robots that explore with no connection, come home, and get smarter every trip.**
 
+[![Autonomous Hive Drones — watch the team video](Autonomous%20Hive%20Drones.gif)](Autonomous%20Hive%20Drones.mp4)
+
+[▶ Watch the full video with audio](Autonomous%20Hive%20Drones.mp4)
+
+
 <p align="center">
   <img src="docs/arena.jpg" width="440" alt="Overhead view of the test arena: a small wheeled rover on a white table, surrounded by cardboard walls, a cardboard tunnel, and artificial plants">
 </p>
