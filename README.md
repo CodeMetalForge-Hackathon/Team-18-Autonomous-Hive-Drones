@@ -1,4 +1,115 @@
-﻿# Team 18 — RoverC Pro
+# Autonomous Hive Drones
+
+**Small, cheap robots that explore with no connection, come home, and get smarter every trip.**
+
+<p align="center">
+  <img src="docs/arena.jpg" width="440" alt="Overhead view of the test arena: a small wheeled rover on a white table, surrounded by cardboard walls, a cardboard tunnel, and artificial plants">
+</p>
+<p align="center"><em>Our test arena. One palm-sized rover, a cardboard tunnel, two rooms, and a scatter of obstacles it knows nothing about when it starts.</em></p>
+
+<!-- Demo video: add the 10 to 20 second clip here. -->
+
+## The problem
+
+A hiker has been reported missing near a forest fire. He is 40, experienced, and carrying a Garmin watch, an Oura ring and a phone. The fire has pushed him somewhere he never meant to go, and he is sheltering there.
+
+Firefighters are committed to the fire, and sending rescuers in blind is dangerous. The terrain is huge and hilly. Cell coverage is spotty, GPS can't be relied on, and smoke and flames hide much of what anyone could see.
+
+Rescuers need something they can send in first: a low-cost drone that works with **no connection at all**, stays inside a search boundary, finds the person, maps the hazards along the way, and comes back knowing more than when it left.
+
+## Our answer: put the intelligence in the hive
+
+A robot that may never come back has to be cheap, and a cheap robot has almost no compute. So we split the job in two.
+
+| | The drone | The hive (base station) |
+|---|---|---|
+| **Compute** | A microcontroller with about 520 KB of RAM | As much as you can bring, including a frontier language model |
+| **Energy** | A tiny battery | Plugged in |
+| **Connection during a mission** | None | Waits for drones to return |
+| **If it's lost** | Replace it | Everything learned is still here |
+
+Each trip out makes the next one better:
+
+```mermaid
+flowchart LR
+    A["Hive writes the drone's autonomy program"] --> B["Drone leaves, with no connection"]
+    B --> C["Drone explores and logs what it senses"]
+    C --> D["Drone returns and docks"]
+    D --> E["Hive studies the evidence and updates its map"]
+    E --> A
+```
+
+When a drone docks, it hands over what it found, how it explored, and the program it was running. The hive reasons over that evidence, revises its map of the world, and rewrites the drone's entire autonomy stack for the next trip.
+
+**This is not reinforcement learning.** There is no policy trained over millions of trials. A frontier model reads real evidence from a handful of trips, forms hypotheses about a world it has never seen, and writes better code.
+
+**It is independent of the hardware.** We chose about the smallest computer you can put on a robot in order to prove the point. The same loop applies to anything larger.
+
+## What we built
+
+- **The drone:** an [M5StickC Plus](https://docs.m5stack.com/en/core/StickC-Plus_SE) on a [RoverC Pro](https://docs.m5stack.com/en/hat/hat_roverc_pro) mecanum base, with a panning ultrasonic sensor, a light sensor and a 9-axis IMU.
+- **The hive:** Claude Opus, running through Claude Code, with a dock that downloads each trip's logs before the next planning turn.
+- **The training camera:** an Aurora 930 Pro depth camera watches the arena from outside and supports initial skills development at the base. It is not on the drone.
+- **The simulator:** a 3D twin of the arena that runs the same deploy, return and improve loop.
+
+## Results
+
+| | What happened |
+|---|---|
+| **Real rover** | Went through the cardboard tunnel fully on its own, running only a Claude-written program onboard, with no tether or camera help during the run. |
+| **Simulator** | Starting from an empty map, completed the whole mission: found every objective and returned to base. |
+
+## How the simulator keeps it honest
+
+The hive gets no shortcuts. Opus starts knowing only the hardware it has been given and the mission.
+
+- **No map.** It never receives the true layout, coordinates, or where objectives are.
+- **No live link.** Once a drone leaves, its program is frozen and the model can't see or help it.
+- **Come home or it didn't happen.** Logs are delivered only when the drone physically docks. A drone that doesn't return teaches the hive nothing.
+- **Tiny programs.** Controllers are bounded programs of at most 1,024 instructions, and each trip's log has to fit in 64 KiB.
+- **Noisy, indirect senses.** Objectives broadcast Bluetooth packets, standing in for a watch, ring or phone. The drone gets signal strength only, with no distance or direction.
+
+## Try the simulator
+
+The photographed arena and the launcher are on the [`simulator-photo-world`](https://github.com/CodeMetalForge-Hackathon/Team-18/tree/simulator-photo-world) branch. On Windows with WSL, install Python 3.10+, Node.js 18+ and Claude Code inside WSL, run `claude auth login` there, and then:
+
+```powershell
+git switch simulator-photo-world
+cd simulator
+.\start-simulator.cmd
+```
+
+Your browser opens the simulator. Drive it by hand with no model calls, or click **Start Opus experiment** to watch the hive learn. Opus runs use your Claude plan, so start with a low sortie limit. On Linux or macOS, run `python3 server.py` from `simulator/` and open http://localhost:8765/?mode=simulator.
+
+Commands for the real rover are in the [technical reference](#technical-reference) below.
+
+## What's next
+
+**Fit the sensors to the mission.** The learning loop doesn't change. To find someone wearing a Garmin and a ring, carry receivers for those signals. In a wildfire, add thermal and visual cameras so the drone can map the fire itself.
+
+**Train it the way we train people.**
+1. **Initial skills** at the base station.
+2. **Advanced skills** in the field with a single subject-matter expert, to work out the early bugs.
+3. **Regular training** alongside the responders, built into the quarterly or semi-annual exercises they already attend, so that person and machine learn to work together before the call comes.
+
+We would start with two or three hardware stacks common to these missions.
+
+**Cut the cord.** Run the hive completely offline, with the model in a container staged near the search area and drones returning to it, then scale from one drone to a swarm.
+
+## What's in this repo
+
+| Folder | What it holds |
+|---|---|
+| [`simulator/`](simulator/README.md) | The 3D simulator and the hive loop that runs Opus |
+| [`firmware/`](firmware/roverc-test) | Code that runs on the drone |
+| [`tools/`](tools) | Rover clients, calibration and camera tools |
+| [`calibration/`](calibration) and [`docs/`](docs) | Measurements and setup notes |
+
+---
+
+# Technical reference
+
+*These notes were written as the work progressed and record the status at the time. Some limits described below have since been passed, including statements that autonomy had not yet been demonstrated on the physical rover.*
 
 Hardware: M5StickC Plus SE (ESP32-PICO-D4) on the RoverC Pro base. Windows USB port: COM5 on the development computer.
 
