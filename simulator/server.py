@@ -45,8 +45,10 @@ def validate_map(m):
     if not isinstance(objects,list) or len(objects)>100:raise ValueError('Invalid desk objects')
     identities=set()
     for obj in objects:
-        if not position(obj) or obj.get('type') not in ('laptop','bottle','hidebox','shade','plant') or not isinstance(obj.get('id'),str) or not obj['id'] or obj['id'] in identities or not all(isinstance(obj.get(k),(int,float)) and not isinstance(obj[k],bool) and math.isfinite(obj[k]) and obj[k]>0 for k in ('w','h')) or obj['x']+obj['w']>250 or obj['y']+obj['h']>100:raise ValueError('Invalid desk object geometry or identity')
+        if not position(obj) or obj.get('type') not in ('laptop','bottle','hidebox','shade','plant','wall','tape') or not isinstance(obj.get('id'),str) or not obj['id'] or obj['id'] in identities or not all(isinstance(obj.get(k),(int,float)) and not isinstance(obj[k],bool) and math.isfinite(obj[k]) and obj[k]>0 for k in ('w','h')) or obj['x']+obj['w']>250 or obj['y']+obj['h']>100:raise ValueError('Invalid desk object geometry or identity')
         if obj.get('opening','left') not in ('left','right'):raise ValueError('Invalid shelter opening')
+        if 'height' in obj and (type(obj['height']) not in (int,float) or not math.isfinite(obj['height']) or not 0<obj['height']<=100):raise ValueError('Invalid object height')
+        if 'door' in obj and (obj['type']!='hidebox' or not isinstance(obj['door'],list) or len(obj['door'])!=2 or not all(type(v) in (int,float) and math.isfinite(v) for v in obj['door']) or not obj['y']<=obj['door'][0]<obj['door'][1]<=obj['y']+obj['h']):raise ValueError('Invalid tunnel doorway')
         identities.add(obj['id'])
     return copy.deepcopy(m)
 

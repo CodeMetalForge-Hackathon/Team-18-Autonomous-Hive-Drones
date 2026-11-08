@@ -1,6 +1,6 @@
 import './test-legacy.mjs';
 import assert from 'node:assert/strict';
-import {Sim,compile,defaults,roms,arena,addObject,PROFILE,LEGACY_PROFILE} from './engine.mjs';
+import {Sim,compile,defaults,roms,tabletopArena as arena,arena as photoArena,addObject,PROFILE,LEGACY_PROFILE} from './engine.mjs';
 const empty={start:{x:100,y:50,a:0},obstacles:[],objects:[],targets:[],observer:null};
 const config={noise:0,lightNoise:0,beam:1};
 assert.equal(defaults.sensorModel,PROFILE);assert.equal(defaults.camera,false);assert.equal(defaults.bumpers,false);assert.equal(defaults.virtualRescue,false);
@@ -49,3 +49,15 @@ const slide=new Sim(empty,config,'yield');for(let i=0;i<10;i++)slide.step({move:
 const diagonal=new Sim(empty,config,'yield');for(let i=0;i<10;i++)diagonal.step({move:1,strafe:1,turn:0});assert.ok(Math.abs(Math.hypot(diagonal.robot.x-100,diagonal.robot.y-50)-12)<1e-6);
 const {auditClearance}=await import('./arena-clearance.mjs');assert.equal(auditClearance(arena()).ok,true);assert.equal(auditClearance(arena()).required_lane_cm,25);
 console.log('Roomy arena and mecanum checks passed: sideways without yaw, normalized diagonal drive, 5 cm side clearance to every objective and shelter.');
+
+// The photographed arena: dock on the tape by the laptop, and every objective reachable by the true footprint.
+const photo=photoArena(),photoSim=new Sim(photo,config,'yield'),tape=photo.objects.find(o=>o.type==='tape'),surface=photo.objects.find(o=>o.id==='surface-laptop'),shippingBox=photo.objects.find(o=>o.id==='shipping-box');
+assert.equal(photoSim.blocked(photo.start.x,photo.start.y),false,'Dock must clear the laptop and partition');
+assert.ok(photo.start.x>=tape.x&&photo.start.x<=tape.x+tape.w&&photo.start.y>=tape.y&&photo.start.y<=tape.y+tape.h,'Dock must be on the tape');
+assert.ok(photo.start.y-(surface.y+surface.h)<15&&photo.start.x>surface.x&&photo.start.x<surface.x+surface.w,'Tape must be next to the laptop');
+const photoAudit=auditClearance(photo,0);assert.equal(photoAudit.ok,true,JSON.stringify(photoAudit));
+assert.equal(photoSim.blocked(shippingBox.x+.5,79),false,'Rover fits through the near doorway');assert.equal(photoSim.blocked(shippingBox.x+.5,70),true,'Doorway jamb is solid');
+const lidEcho=new Sim({...photo,start:{x:124,y:30,a:-Math.PI/2}},config,'yield');assert.equal(lidEcho.readings.range_valid,1);assert.ok(lidEcho.readings.range>8&&lidEcho.readings.range<13,'Sonar sees the laptop lid on the room side');
+const boxInterior=new Sim({...photo,start:{x:97,y:75,a:0}},config,'yield');assert.ok(boxInterior.readings.light<.3,'Box interior is a low-light refuge');
+for(const object of photo.objects)assert.ok(object.x>=0&&object.y>=0&&object.x+object.w<=250&&object.y+object.h<=100,object.id);
+console.log('Photo arena checks passed: dock on the tape, doorway, reachable objectives, laptop-lid echo and dark box interior.');
