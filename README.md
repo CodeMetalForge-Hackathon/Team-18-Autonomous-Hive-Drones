@@ -9,6 +9,8 @@
 
 <!-- Demo video: add the 10 to 20 second clip here. -->
 
+[Watch the development timelapse](docs/rover-timelapse.mp4) — 20 hours of recorded footage condensed into 90 seconds (MP4, 46 MB).
+
 ## The problem
 
 A hiker has been reported missing near a forest fire. He is 40, experienced, and carrying a Garmin watch, an Oura ring and a phone. The fire has pushed him somewhere he never meant to go, and he is sheltering there.
