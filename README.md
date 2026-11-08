@@ -94,6 +94,26 @@ only serial control is needed.
 Run the client tests without hardware using
 `python -m unittest discover -s tools -p test_rover.py`.
 
+### Wi-Fi control
+
+The firmware keeps its access point available and can also join a 2.4 GHz
+network. With the rover stopped and disarmed, send `WIFI_JOIN ` followed by the
+SSID, a tab, the password, and a newline over serial. Credentials are stored on
+the device. `WIFI` reports its addresses; `WIFI_AP` removes the saved station
+credentials. Do not put credentials in source files or commit their output.
+
+`tools/rover_wifi.py` exposes the same controls through `WifiRover(url, key,
+camera_config=None)`. The key is the rover's generated access-point password.
+All `/api/robot/` routes require it; actuator calls also use an exclusive lease
+and increasing sequence numbers. Camera snapshots still come from the host
+recorder. The existing browser controller remains available on the rover's
+access point.
+
+Wheel commands expire on the controller within 300 ms without renewal; boosted
+pulses expire within 150 ms. Connection loss or an expired control lease stops
+and disarms the wheels. A lost response is not automatically retried. Servo
+targets retain the same mechanical limitations as serial control.
+
 ## Onboard movement tests and navigation
 
 `firmware/roverc-test/roverc-test.ino` uses M5Unified and M5GFX. The Plus SE has no IMU, so IMU initialization is disabled. Rover communication uses I2C bus 0 (M5Unified reserves bus 1 for internal peripherals), SDA GPIO 0, SCL GPIO 26, and I2C address 0x38, following M5Stack's RoverC Pro example.
@@ -174,3 +194,13 @@ Device status is OK with problem code 0. Hiwonder's DeptrumScope 3.6.17 runs und
 The viewer, extracted driver reference, and local installation helper are in `C:\Users\naclo\Downloads\Aurora930-Pro`. These third-party binaries are kept outside the repository. The camera is not yet connected to rover navigation or obstacle avoidance.
 
 
+
+
+The optional Grove IMU 10DOF connects to a RoverC base I2C socket; the sonar
+remains on the M5Stick Grove socket. A passive I2C hub cannot combine these two
+interfaces. Install `Adafruit BMP280 Library@2.6.8` and its dependencies before
+building firmware. `IMU` over serial and `GET /api/robot/imu` over Wi-Fi return
+sensor-axis acceleration in g, angular velocity in degrees/s, magnetic field
+in microtesla, pressure in Pa, and temperature in Celsius. Each sensor has a
+validity flag; unavailable samples are null. These are measurements, not wheel
+encoders or a calibrated position estimate. Python clients expose `imu()`.

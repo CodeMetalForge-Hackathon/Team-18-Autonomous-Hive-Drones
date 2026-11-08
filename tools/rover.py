@@ -129,6 +129,14 @@ class Rover:
             raise PermissionError('Actuator access is disabled for this run')
         return self.query('SILENCE', 'BUZZER_OK')
 
+    def imu(self):
+        self.connect().reset_input_buffer()
+        self.send('IMU')
+        for line in self.read_for(.3).splitlines():
+            if line.startswith('IMU '):
+                return json.loads(line[4:])
+        raise RuntimeError('Missing IMU response')
+
     def sonar(self):
         status = self.status()
         if status.get('protocol', 1) < 2:

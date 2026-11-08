@@ -1,9 +1,11 @@
 #include <M5Unified.h>
 #include <Wire.h>
 #include "Sonar.h"
+#include "Imu.h"
 
 // M5Unified reserves bus 1 for the internal AXP192/RTC.
 TwoWire rover(0);
+Imu imu(rover);
 constexpr uint8_t ADDRESS = 0x38;
 volatile bool moving = false;
 volatile uint32_t stopAt = 0;
@@ -171,8 +173,23 @@ void command(const char* cmd) {
     Serial.println("STOPPED");
   } else if (!strcmp(cmd, "STATUS")) {
     connected = probe(); report();
+  } else if (!strcmp(cmd, "IMU")) {
+    xSemaphoreTake(motorMutex, portMAX_DELAY);
+    String reading = imu.sample();
+    xSemaphoreGive(motorMutex);
+    Serial.println(String("IMU ") + reading);
+  } else if (!strcmp(cmd, "I2CSCAN")) {
+    if (moving || armed) { Serial.println("INVALID_BUSY"); return; }
+    xSemaphoreTake(motorMutex, portMAX_DELAY);
+    Serial.print("I2C_SCAN sda=0 scl=26 addresses=");
+    for (uint8_t address=8; address<120; ++address) {
+      rover.beginTransmission(address);
+      if (rover.endTransmission()==0) Serial.printf("0x%02x,", address);
+    }
+    Serial.println();
+    xSemaphoreGive(motorMutex);
   } else if (!strcmp(cmd, "CAPABILITIES")) {
-    Serial.printf("ROVER_CAPABILITIES version=3 wheel_limit=40 pulse_limit=60 pulse_max_ms=150 servo_channels=2 servo_angle_max=180 servo_pulse_min_us=500 servo_pulse_max_us=2500 buzzer=1 sonar_configured=%d\n", Sonar::configured);
+    Serial.printf("ROVER_CAPABILITIES version=3 wheel_limit=40 pulse_limit=60 pulse_max_ms=150 servo_channels=2 servo_angle_max=180 servo_pulse_min_us=500 servo_pulse_max_us=2500 buzzer=1 imu=1 sonar_configured=%d\n", Sonar::configured);
   } else if (!strcmp(cmd, "BUZZER")) {
     Serial.printf("BUZZER_STATUS enabled=%d playing=%d volume=%u pin=2\n", M5.Speaker.isEnabled(), M5.Speaker.isPlaying(), M5.Speaker.getVolume());
   } else if (!strcmp(cmd, "SILENCE")) {
@@ -281,6 +298,7 @@ void setup() {
   sonar.begin();
   stopMotors();
   connected = probe();
+  imu.begin();
   xTaskCreatePinnedToCore(motorWatchdog, "motor-stop", 3072, nullptr, 3, nullptr, 1);
   beginWifi();
   screen();
@@ -305,12 +323,13 @@ void loop() {
     screen();
   }
   for (uint8_t bytesRead = 0; Serial.available() && bytesRead < 64; ++bytesRead) {
-    static char cmd[32]; static uint8_t count = 0; static bool overflow = false;
+    static char cmd[160]; static uint8_t count = 0; static bool overflow = false;
     char c = Serial.read();
     if (c == '\n' || c == '\r') {
       cmd[count] = 0;
       if (overflow) { navigator.stop(); stopMotors(); armed=false; Serial.println("INVALID_COMMAND"); }
       else if (!strcmp(cmd, "WIFI")) reportWifi();
+      else if (configureWifi(cmd)) {}
       else if (count) {
         if (strcmp(cmd, "STATUS") && strcmp(cmd, "CAPABILITIES") && strcmp(cmd, "SONAR") && strcmp(cmd, "SERVOS") && strcmp(cmd, "BUZZER")) revokeRemote();
         command(cmd);

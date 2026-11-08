@@ -7,34 +7,37 @@
 WebServer web(80);
 String wifiName, wifiPassword, remoteToken;
 uint32_t remoteSequence = 0, remoteSeen = 0;
+bool remoteViaStation = false, remoteRaw = false;
 
-void revokeRemote() { remoteToken=""; remoteSequence=0; }
+void revokeRemote() { remoteToken=""; remoteSequence=0; remoteRaw=false; }
 void serviceWifiSafety() {
   if (watchdogExpired) {
     watchdogExpired=false; navigator.stop(); stopMotors();
-    if (remoteToken.length()) { armed=false; revokeRemote(); }
+    if (remoteToken.length()) { armed=false; if(!remoteRaw) revokeRemote(); }
     Serial.println("TIMED_STOP");
   }
   if (physicalStop || (remoteToken.length() &&
-      (millis()-remoteSeen>1500 || WiFi.softAPgetStationNum()==0))) {
+      (millis()-remoteSeen>1500 || (remoteViaStation ? WiFi.status()!=WL_CONNECTED : WiFi.softAPgetStationNum()==0)))) {
     if (remoteToken.length()) { navigator.stop(); stopMotors(); armed=false; revokeRemote(); }
   }
 }
 void wifiScreen() {
   M5.Display.println(wifiName);
   M5.Display.println("Pass: " + wifiPassword);
-  M5.Display.println("http://192.168.4.1");
+  M5.Display.println(String("http://") + (WiFi.status()==WL_CONNECTED ? WiFi.localIP().toString() : WiFi.softAPIP().toString()));
 }
 void reportWifi() {
   Serial.printf("WIFI_READY ssid=%s password=%s ip=%s clients=%d\n", wifiName.c_str(), wifiPassword.c_str(), WiFi.softAPIP().toString().c_str(), WiFi.softAPgetStationNum());
+  Serial.printf("WIFI_STATION connected=%d ip=%s\n", WiFi.status()==WL_CONNECTED, WiFi.localIP().toString().c_str());
 }
 void replyError(int code, const char* message) {
   web.send(code,"application/json",String("{\"error\":\"")+message+"\"}");
 }
 bool isControlRequest() {
   if (web.header("X-Rover-Control")!="1") { replyError(403,"Use the rover control page"); return false; }
+  if(web.client().localIP()!=WiFi.softAPIP() && web.header("X-Rover-Key")!=wifiPassword) { replyError(403,"Access key required");return false; }
   String origin=web.header("Origin");
-  if (origin.length() && origin!="http://192.168.4.1") { replyError(403,"Invalid origin"); return false; }
+  if (origin.length() && origin!=String("http://")+WiFi.softAPIP().toString() && origin!=String("http://")+WiFi.localIP().toString()) { replyError(403,"Invalid origin"); return false; }
   return true;
 }
 bool ownsControl() {
@@ -52,6 +55,25 @@ bool readSequence() {
   if(sequence<=remoteSequence) { replyError(409,"Expired command"); return false; }
   remoteSequence=sequence; return true;
 }
+bool configureWifi(const char* cmd) {
+  if(strncmp(cmd,"WIFI_JOIN ",10) && strcmp(cmd,"WIFI_AP")) return false;
+  if(moving || armed || remoteToken.length()) { Serial.println("WIFI_BUSY");return true; }
+  Preferences settings;
+  if(!settings.begin("rover-wifi",false)) {Serial.println("WIFI_STORAGE_FAILED");return true;}
+  if(!strcmp(cmd,"WIFI_AP")) {
+    settings.remove("ssid");settings.remove("station-pass");settings.end();
+    WiFi.disconnect();WiFi.mode(WIFI_AP);Serial.println("WIFI_AP_READY");return true;
+  }
+  String value=cmd+10;int delimiter=value.indexOf('\t');
+  if(delimiter<1 || delimiter>32 || value.length()-delimiter-1<8 || value.length()-delimiter-1>63) {
+    settings.end();Serial.println("INVALID_WIFI_CONFIG");return true;
+  }
+  String ssid=value.substring(0,delimiter),password=value.substring(delimiter+1);
+  settings.putString("ssid",ssid);settings.putString("station-pass",password);settings.end();
+  WiFi.mode(WIFI_AP_STA);WiFi.setAutoReconnect(true);WiFi.begin(ssid.c_str(),password.c_str());
+  Serial.println("WIFI_CONNECTING");return true;
+}
+#include "RemoteApi.h"
 void beginWifi() {
   Preferences settings;
   if (!settings.begin("rover-wifi",false)) { Serial.println("WIFI_STORAGE_FAILED"); return; }
@@ -60,13 +82,17 @@ void beginWifi() {
     char password[17]; snprintf(password,sizeof(password),"%08lx%08lx",(unsigned long)esp_random(),(unsigned long)esp_random());
     wifiPassword=password; settings.putString("password",wifiPassword);
   }
+  String stationSsid=settings.getString("ssid","");
+  String stationPassword=settings.getString("station-pass","");
   settings.end();
   char suffix[7]; snprintf(suffix,sizeof(suffix),"%06lx",(unsigned long)((ESP.getEfuseMac()>>24)&0xffffff));
   wifiName=String("RoverC18-")+suffix;
-  WiFi.mode(WIFI_AP);
+  WiFi.mode(stationSsid.length() ? WIFI_AP_STA : WIFI_AP);
   if(!WiFi.softAP(wifiName.c_str(),wifiPassword.c_str(),6,false,2)) { Serial.println("WIFI_AP_FAILED"); return; }
-  const char* headers[]={"X-Rover-Control","X-Rover-Token","Origin"};
-  web.collectHeaders(headers,3);
+  if(stationSsid.length()) { WiFi.setAutoReconnect(true);WiFi.begin(stationSsid.c_str(),stationPassword.c_str()); }
+  const char* headers[]={"X-Rover-Control","X-Rover-Token","Origin","X-Rover-Key"};
+  web.collectHeaders(headers,4);
+  registerRemoteApi();
   web.on("/",HTTP_GET,[]{web.sendHeader("Cache-Control","no-store");web.send_P(200,"text/html",CONTROL_PAGE);});
   web.on("/api/status",HTTP_GET,[]{
     serviceWifiSafety();
@@ -83,7 +109,7 @@ void beginWifi() {
     command("ARM");
     if(!armed){replyError(409,"Rover not found");return;}
     char token[33];snprintf(token,sizeof(token),"%08lx%08lx%08lx%08lx",(unsigned long)esp_random(),(unsigned long)esp_random(),(unsigned long)esp_random(),(unsigned long)esp_random());
-    remoteToken=token;remoteSequence=0;remoteSeen=millis();
+    remoteToken=token;remoteSequence=0;remoteSeen=millis();remoteRaw=false;remoteViaStation=web.client().localIP()!=WiFi.softAPIP();
     web.send(200,"application/json",String("{\"token\":\"")+remoteToken+"\"}");
   });
   web.on("/api/drive",HTTP_POST,[]{
