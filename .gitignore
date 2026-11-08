@@ -11,3 +11,4 @@ recordings/
 feedback-runs/
 backup-parts/
 .camera-recorder.json
+node_modules/

@@ -1,0 +1,2 @@
+export const formatTime=value=>{const t=Math.max(0,Math.floor(value));return [Math.floor(t/3600),Math.floor(t/60)%60,t%60].map(n=>String(n).padStart(2,'0')).join(':');};
+export function locateTime(clips,time){let start=0,index=0;while(index<clips.length-1&&time>=start+clips[index].duration){start+=clips[index++].duration;}return {index,offset:Math.max(0,Math.min(time-start,clips[index]?.duration||0)),start};}

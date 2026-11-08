@@ -1,0 +1,20 @@
+﻿{
+    "name":  "team18-rover-ui",
+    "private":  true,
+    "type":  "module",
+    "scripts":  {
+                    "dev":  "vite --config frontend/vite.config.js",
+                    "build":  "vite build --config frontend/vite.config.js",
+                    "test":  "node test-camera-replay.mjs",
+                    "test:browser":  "node test-camera-browser.mjs"
+                },
+    "dependencies":  {
+                         "lucide-react":  "^0.468.0",
+                         "react":  "^19.0.0",
+                         "react-dom":  "^19.0.0"
+                     },
+    "devDependencies":  {
+                            "@playwright/test":  "^1.65.0",
+                            "vite":  "^8.3.6"
+                        }
+}

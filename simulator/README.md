@@ -1,5 +1,11 @@
 # Rover Lab
 
+The camera frontend uses React, Vite, and Lucide icons. **Replay** presents each recording session as one timeline; the speed menu accepts a custom multiplier, and **Live** returns to the camera without interrupting recording. The archive is read from `D:\Team18-Recordings` on Windows or `/mnt/d/Team18-Recordings` under WSL (the drive must be mounted). The currently open segment is withheld until it finishes. This is separate from simulated mission replay.
+
+From `simulator/`, run `npm install` and `npm run dev` for the Vite development server (API requests proxy to Python on port 8765). `npm run build` produces `web-dist/`, which the Python server serves automatically at `/`. Frontend source is in `frontend/src/`; `npm test` checks timeline calculations. The existing simulation remains available through its static assets.
+
+For smooth playback above 16×, start Python with `--archive-ffmpeg <ffmpeg.exe>`. The backend prepares cached 60 fps H.264 previews in `D:\Team18-Recordings\.replay-cache` (or the corresponding mounted drive). The player buffers these into one continuous MediaSource timeline, preserving original recording time in the clock and scrubber. The first use of a speed/position can show “Preparing playback” while the cache is built. Original recordings are never modified. `npm run test:browser` verifies playback, seeking, and the live-view handoff; `node perf-camera.mjs` measures displayed frame rate after preparation.
+
 A local tabletop search simulator with an automatic Claude Code Opus → rover → dock → Opus loop.
 
 ## Current photographed hardware
@@ -32,6 +38,24 @@ python3 server.py
 Open http://localhost:8765. On Windows, `start.cmd` launches the same server in the default WSL distribution from the checkout directory. Keep the terminal open. A Python static file server still runs the manual simulator but cannot invoke Claude or manage experiments.
 
 Dependencies: Python 3.10+, Node.js 18+, and the authenticated `claude` CLI with `--restricted` support (tested with Claude Code 2.1.319). The server detects Node on PATH, including `node.exe` through WSL interop. Set `ROVER_NODE` to its executable path if automatic detection fails. Existing Claude Code login is reused; there is no OpenAI API dependency. Run `claude auth login` in the same environment as the server if login is unavailable. Linux/WSL has been tested; the Windows launcher requires WSL. The UI uses locally vendored Three.js 0.170.0, local STL assets, and system fonts; rendering needs no CDN or font service.
+
+## Live camera
+
+Add `--camera-config /path/to/.camera-recorder.json` when starting `server.py`,
+The app opens in **Live** mode. The simulator remains available at `/?mode=simulator`. The recorder must already be
+running. This is an observer feed: it does not connect simulator controls to the
+physical robot or interrupt another controller. Live and Simulator have separate panels within the same application.
+The simulator retains its existing layout and controls.
+
+The frame reader needs NumPy and Pillow. If the recorder runs on Windows and
+Rover Lab runs in WSL, add `--camera-python /mnt/c/path/to/python.exe` and use the
+Windows path for `--camera-config`. That Python needs NumPy and Pillow installed.
+The worker reads the recorder configuration on its own host; credentials stay on
+the backend. Keep the configuration outside source control.
+
+Only visible camera views request frames. The page pauses polling when hidden,
+shares a short backend cache between viewers, and labels a retained last frame
+when the recorder becomes unavailable. Frames older than one second are rejected.
 
 ## Automatic experiment
 

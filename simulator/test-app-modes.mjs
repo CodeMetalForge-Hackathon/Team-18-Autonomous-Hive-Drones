@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict';
+function element(){
+  const classes=new Set();
+  return {hidden:false,dataset:{},textContent:'',classList:{add:x=>classes.add(x),remove:x=>classes.delete(x),contains:x=>classes.has(x),toggle(x,on){on?classes.add(x):classes.delete(x)}},setAttribute(k,v){this[k]=v}};
+}
+const ids=['live-mode','simulator-mode','mode-live','mode-simulator','app-status','live-camera','camera-image','camera-status'];
+const elements=Object.fromEntries(ids.map(id=>[id,element()]));
+const timers=new Set();let n=0,events=0,loads=0;
+globalThis.document={body:element(),hidden:false,getElementById:id=>elements[id],addEventListener(){}};
+globalThis.window={dispatchEvent(){events++}};
+globalThis.setTimeout=()=>{timers.add(++n);return n};
+globalThis.clearTimeout=id=>timers.delete(id);
+globalThis.fetch=async path=>path.endsWith('/status')?{ok:true,json:async()=>({configured:true})}:{ok:true,headers:new Map([['X-Captured-Ms',String(Date.now())],['X-Frame-Width','640'],['X-Frame-Height','400']]),blob:async()=>new Blob(['frame'])};
+globalThis.location={search:''};
+const {setMode}=await import('./app.mjs');
+await new Promise(resolve=>setImmediate(resolve));
+assert.equal(document.body.dataset.mode,'live');
+assert.equal(elements['live-mode'].hidden,false);
+assert.equal(elements['simulator-mode'].hidden,true);
+await setMode('simulator',async()=>{loads++});
+assert.equal(loads,1);
+assert.equal(document.body.dataset.mode,'simulator');
+assert.equal(elements['live-mode'].hidden,true);
+assert.equal(elements['simulator-mode'].hidden,false);
+assert.equal(timers.size,0,'camera polling must stop in simulator mode');
+await setMode('live');
+await new Promise(resolve=>setImmediate(resolve));
+assert.equal(elements['mode-live']['aria-selected'],'true');
+await setMode('simulator',async()=>{loads++});
+assert.equal(loads,1,'mode changes must reuse the existing simulator');
+assert.equal(events,4);
+console.log('App modes: Live default, isolated views, lazy simulator, and camera cancellation passed.');

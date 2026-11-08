@@ -2,7 +2,11 @@
 """Trusted human observer + dock/Claude orchestrator. Never put this in agent cwd."""
 import argparse, copy, hashlib, json, math, os, pathlib, re, shutil, signal, subprocess, threading, time, uuid
 import replay
+import camera_archive
+import replay_render
 import supervisor
+from live_camera import LiveCamera
+import base64
 from runtime import find_node, node_script_path
 from dock_data import calculate, project_ranges
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
@@ -433,6 +437,8 @@ class Harness:
         return {'files':sorted(files,key=lambda f:f['path']),'map':estimate}
 
 harness=Harness()
+camera=LiveCamera()
+archive_ffmpeg=shutil.which('ffmpeg')
 def static_path_allowed(path):
     decoded=unquote(path)
     parts=pathlib.PurePosixPath(decoded).parts
@@ -441,6 +447,14 @@ def static_path_allowed(path):
     return not (any(p.startswith('.') for p in parts) or suffix not in ('','.html','.css','.mjs','.js','.stl','.json','.ico','.png','.txt') or suffix=='.txt' and decoded not in notices or decoded in ('/sortie.mjs','/validate.mjs'))
 
 class Handler(SimpleHTTPRequestHandler):
+    extensions_map={**SimpleHTTPRequestHandler.extensions_map,'.mjs':'text/javascript','.js':'text/javascript'}
+    def translate_path(self,path):
+        route=unquote(urlparse(path).path)
+        distribution=ROOT/'web-dist'
+        if (distribution/'index.html').is_file() and (route in ('/','/index.html') or route.startswith('/ui-assets/')):
+            target=(distribution/('index.html' if route in ('/','/index.html') else route.lstrip('/'))).resolve()
+            if target.is_relative_to(distribution.resolve()):return str(target)
+        return super().translate_path(path)
     def __init__(self,*a,**kw):super().__init__(*a,directory=str(ROOT),**kw)
     def log_message(self,*args):pass
     def local_host(self):
@@ -461,6 +475,22 @@ class Handler(SimpleHTTPRequestHandler):
         if not self.local_host():return self.send_json({'error':'Local hostnames only'},403)
         route=urlparse(self.path);query=parse_qs(route.query)
         try:
+            if route.path=='/api/camera/render':return self.send_json(replay_render.request(camera_archive.DEFAULT_ROOT,camera_archive.index(camera.python),query.get('session',[''])[0],int(query.get('factor',['0'])[0]),int(query.get('block',['0'])[0]),archive_ffmpeg))
+            if route.path=='/api/camera/rendered':return camera_archive.serve_file(self,replay_render.output_path(camera_archive.DEFAULT_ROOT,query.get('id',[''])[0]))
+            if route.path=='/api/camera/recordings':return self.send_json({'clips':camera_archive.index(camera.python)})
+            if route.path=='/api/camera/recording':return camera_archive.serve(self,camera_archive.DEFAULT_ROOT,query.get('session',[''])[0],query.get('file',[''])[0],camera_archive.index(camera.python))
+            if route.path=='/api/camera/status':return self.send_json(camera.status())
+            if route.path=='/api/camera.jpg':
+                try:frame=camera.frame()
+                except RuntimeError as error:return self.send_json({'error':str(error)},503)
+                data=base64.b64decode(frame['jpeg'])
+                self.send_response(200)
+                for key,value in {'Content-Type':'image/jpeg','Content-Length':str(len(data)),
+                                  'Cache-Control':'no-store','Cross-Origin-Resource-Policy':'same-origin',
+                                  'X-Captured-Ms':str(frame['captured_ms']),
+                                  'X-Frame-Width':str(frame['width']),'X-Frame-Height':str(frame['height'])}.items():
+                    self.send_header(key,value)
+                self.end_headers();self.wfile.write(data);return
             if route.path=='/api/status':return self.send_json({'backend':True,'claude_available':bool(CLAUDE),'state':harness.snapshot(),'workspace':harness.workspace(),'events':[e for e in harness.events if e['id']>int(query.get('after',['0'])[0])]})
             if route.path=='/api/supervisor':return self.send_json(supervisor.projection(harness))
             if route.path=='/api/history':return self.send_json(replay.history(RUNTIME,harness.state.get('run_id')))
@@ -492,8 +522,11 @@ class Handler(SimpleHTTPRequestHandler):
         except (ValueError,OSError) as e:return self.send_json({'error':str(e)},400)
 
 if __name__=='__main__':
-    parser=argparse.ArgumentParser();parser.add_argument('--port',type=int,default=8765);args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--port',type=int,default=8765);parser.add_argument('--camera-config',type=pathlib.Path);parser.add_argument('--camera-python',type=pathlib.Path);parser.add_argument('--archive-ffmpeg',type=pathlib.Path);args=parser.parse_args()
+    archive_ffmpeg=args.archive_ffmpeg or archive_ffmpeg
+    camera=LiveCamera(args.camera_config,args.camera_python)
     print(f'Rover Lab + Opus dock harness: http://localhost:{args.port}',flush=True)
     server=ThreadingHTTPServer(('127.0.0.1',args.port),Handler)
     try:server.serve_forever()
     except KeyboardInterrupt:harness.stop()
+    finally:camera.close();server.server_close()
