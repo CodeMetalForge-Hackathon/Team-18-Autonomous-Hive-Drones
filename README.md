@@ -11,7 +11,7 @@ cd simulator
 python3 server.py
 ```
 
-Open http://localhost:8765. Python 3.10+, Node.js and an authenticated recent Claude Code CLI are required for automatic Opus experiments; manual simulation does not call a model. Local recordings and credentials are excluded from Git. See the simulator's [public-repository notes](simulator/README.md#public-repository-and-local-data) and [third-party notices](simulator/THIRD_PARTY_NOTICES.md).
+Open http://localhost:8765/?mode=simulator (the root URL is the camera app). Python 3.10+, Node.js and an authenticated recent Claude Code CLI are required for automatic Opus experiments; manual simulation does not call a model. Local recordings and credentials are excluded from Git. See the simulator's [public-repository notes](simulator/README.md#public-repository-and-local-data) and [third-party notices](simulator/THIRD_PARTY_NOTICES.md).
 
 ## Wireless control
 

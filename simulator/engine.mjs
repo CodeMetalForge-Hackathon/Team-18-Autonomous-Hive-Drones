@@ -15,10 +15,34 @@ else if(type==='bottle'||type==='plant')map.obstacles.push({x,y,w,h,shape:'circl
 else map.obstacles.push({x,y,w,h,owner:id});
 return object;
 }
-export function arena(){const map={width:W,height:H,start:{x:18,y:50,a:0},obstacles:[],objects:[],targets:[{x:74,y:81},{x:146,y:81},{x:208,y:81}],observer:{x:132,y:7}};
+export function tabletopArena(){const map={width:W,height:H,start:{x:18,y:50,a:0},obstacles:[],objects:[],targets:[{x:74,y:81},{x:146,y:81},{x:208,y:81}],observer:{x:132,y:7}};
 // Furniture clusters leave a 37 cm main lane, >=28 cm between shelters,
 // 32 cm shelter interiors, and a 26 cm route around the reversed entrance.
 for(const [type,x,y]of [['laptop',40,4],['laptop',114,4],['laptop',188,4],['bottle',72,20],['bottle',146,20],['bottle',220,20],['bottle',230,10],['hidebox',56,64],['hidebox',128,64],['hidebox',190,64],['plant',30,8],['plant',72,8],['plant',146,8],['plant',220,8],['plant',1,82],['plant',90,86],['plant',1,4],['plant',11,4]])addObject(map,type,x,y,type==='hidebox'&&x===190?'right':'left');return map;}
+// Physical arena measured from one overhead photo (2026-11-08). +x runs from the near end of the
+// table to the far end; +y runs from the photo's left to its right, so the layout is not mirrored.
+// Scale comes from the laptop hinge, rover and tape roll, so positions are good to a few centimetres.
+// The dock sits on the black tape beside the laptop, facing across the room like the photographed rover.
+// Unseen in the photo and assumed: the box's far side is open, making it the only route between rooms.
+export function arena(){
+const map={width:W,height:H,start:{x:130.5,y:21.6,a:Math.PI/2},obstacles:[],objects:[],targets:[{x:160,y:70},{x:97,y:75},{x:38,y:55}],observer:null};
+const solid=(type,id,x,y,w,h,extra={},shape)=>{map.objects.push({id,type,x,y,w,h,...extra});map.obstacles.push({x,y,w,h,owner:id,...(shape?{shape}:{})});};
+const wall=(id,x,y,w,h,height=14)=>solid('wall',id,x,y,w,h,{height});
+const pot=(id,cx,cy,d=10)=>solid('plant',id,cx-d/2,cy-d/2,d,d,{wood:false},'circle');
+const planter=(id,cx,cy,d=9)=>solid('plant',id,cx-d/2,cy-d/2,d,d,{wood:true});
+wall('wall-near',0,1,1,98.8);wall('wall-near-left',0,1,74.5,1);wall('wall-near-right',0,98.8,74.5,1);
+wall('wall-cross',73.5,2,1,59.5,22);wall('wall-cross-filler',73.5,96,1,2.8,22);wall('wall-partition',74.5,20,47.5,1);
+wall('wall-far',178.7,7,1,89.5,12);wall('wall-far-left',140,7,39.7,1,12);wall('wall-far-right',114.5,95.5,65.2,1,12);
+const box={id:'shipping-box',type:'hidebox',x:73.5,y:61.5,w:41,h:34.5,opening:'right',door:[71,87],height:21};map.objects.push(box);
+for(const [x,y,w,h] of [[73.5,61.5,41,1],[73.5,95,41,1],[73.5,61.5,1,9.5],[73.5,87,1,9]])map.obstacles.push({x,y,w,h,owner:box.id});
+solid('laptop','surface-laptop',108,.5,32,13,{hinge:'high'});
+map.objects.push({id:'start-tape',type:'tape',x:122,y:16,w:17,h:11});
+planter('planter-far-left',174,29.4);planter('planter-far-right',174,88.4);planter('planter-behind-box',122.8,90.4);planter('planter-mid',104.8,34.3);
+pot('pot-mid',105.2,48.2,9);pot('pot-behind-cross-wall',82,47,8);
+pot('pot-near-1',54.2,13.8);pot('pot-near-2',62,25.5);pot('pot-near-3',60.3,47.4,8);pot('pot-near-4',23.3,13.2);pot('pot-near-5',7.6,12.9);pot('pot-near-6',7.6,45.1,8);pot('pot-near-7',7,77.4);pot('pot-near-8',7.4,93.7);
+// Beyond the far wall: on the table in the photo, out of the rover's reach.
+solid('laptop','desk-laptop',217.5,6,32,23,{hinge:'high'});wall('monitor-box',208,33,41,27,6);solid('bottle','bottle-water',199,80,7,7,{},'circle');solid('bottle','bottle-sanitizer',199,60,7,7,{},'circle');
+return map;}
 export const roms={
 'Scan in place':`; One movable ultrasonic channel. Two transducers are one range module.
 sweep 30
@@ -99,7 +123,7 @@ sensorRandom(){this.sensorRng=(Math.imul(1664525,this.sensorRng)+1013904223)>>>0
 headCommand(op,value){value=Number.isFinite(value)?value:0;if(op==='pan'){this.head.rate=0;this.head.target=clamp(value,-this.c.panSpan/2,this.c.panSpan/2);this.cmd.pan=this.head.target;this.cmd.sweep=0;}else{const rate=clamp(value,-this.c.panSpeed,this.c.panSpeed);if(rate!==this.head.rate)this.head.direction=rate<0?-1:1;this.head.rate=rate;this.cmd.sweep=rate;if(!rate){this.head.target=this.head.angle;this.cmd.pan=this.head.angle;}}}
 advanceHead(){const h=this.head,limit=this.c.panSpan/2;if(h.rate){h.angle+=Math.abs(h.rate)*h.direction*DT;while(h.angle>limit||h.angle< -limit){if(h.angle>limit){h.angle=2*limit-h.angle;h.direction=-1;}else{h.angle=-2*limit-h.angle;h.direction=1;}}}else h.angle+=clamp(h.target-h.angle,-this.c.panSpeed*DT,this.c.panSpeed*DT);}
 sonarOrigin(estimated=false){const p=estimated?this.odom:this.robot;const angle=p.a+this.head.angle*Math.PI/180;return {x:p.x+HEAD_PIVOT_CM*Math.cos(p.a)+HEAD_OFFSET_CM*Math.cos(angle),y:p.y+HEAD_PIVOT_CM*Math.sin(p.a)+HEAD_OFFSET_CM*Math.sin(angle),a:angle};}
-sonarBlocked(x,y){const objects=this.map.objects||[];const ordinary=this.map.obstacles.filter(b=>!objects.some(o=>o.id===b.owner&&(o.type==='laptop'||o.type==='shade')));if(ordinary.some(b=>b.shape==='circle'?Math.hypot(x-b.x-b.w/2,y-b.y-b.h/2)<=b.w/2:x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h))return true;return objects.some(o=>o.type==='laptop'&&x>=o.x&&x<=o.x+o.w&&y>=o.y+.4&&y<=o.y+1.2);}
+sonarBlocked(x,y){const objects=this.map.objects||[];const ordinary=this.map.obstacles.filter(b=>!objects.some(o=>o.id===b.owner&&(o.type==='laptop'||o.type==='shade')));if(ordinary.some(b=>b.shape==='circle'?Math.hypot(x-b.x-b.w/2,y-b.y-b.h/2)<=b.w/2:x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h))return true;return objects.some(o=>o.type==='laptop'&&x>=o.x&&x<=o.x+o.w&&(o.hinge==='high'?y>=o.y+o.h-1.2&&y<=o.y+o.h-.4:y>=o.y+.4&&y<=o.y+1.2));}
 sonarRay(origin,a,max){for(let d=0;d<=max;d+=.25)if(this.sonarBlocked(origin.x+Math.cos(a)*d,origin.y+Math.sin(a)*d))return d;return null;}
 lightTransmission(){let transmission=1;for(const o of this.map.objects||[]){if(!['hidebox','shade'].includes(o.type))continue;const {x,y}=this.robot;if(x>o.x&&x<o.x+o.w&&y>o.y&&y<o.y+o.h){const depth=o.type==='hidebox'?(o.opening==='right'?o.x+o.w-x:x-o.x):Math.min(x-o.x,o.x+o.w-x,y-o.y,o.y+o.h-y);const leak=this.c.coverLeak+(1-this.c.coverLeak)*.45*Math.exp(-depth/8);transmission=Math.min(transmission,leak);}}return transmission;}
 bleRandom(){this.bleRng=(Math.imul(1664525,this.bleRng)+1013904223)>>>0;return this.bleRng/4294967296;}

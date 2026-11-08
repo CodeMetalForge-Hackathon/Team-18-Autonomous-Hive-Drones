@@ -35,7 +35,7 @@ cd simulator
 python3 server.py
 ```
 
-Open http://localhost:8765. On Windows, `start.cmd` launches the same server in the default WSL distribution from the checkout directory. Keep the terminal open. A Python static file server still runs the manual simulator but cannot invoke Claude or manage experiments.
+Open http://localhost:8765/?mode=simulator (the root URL is the camera app). On Windows, `start.cmd` launches the same server in the default WSL distribution from the checkout directory. Keep the terminal open. A Python static file server still runs the manual simulator but cannot invoke Claude or manage experiments.
 
 Dependencies: Python 3.10+, Node.js 18+, and the authenticated `claude` CLI with `--restricted` support (tested with Claude Code 2.1.319). The server detects Node on PATH, including `node.exe` through WSL interop. Set `ROVER_NODE` to its executable path if automatic detection fails. Existing Claude Code login is reused; there is no OpenAI API dependency. Run `claude auth login` in the same environment as the server if login is unavailable. Linux/WSL has been tested; the Windows launcher requires WSL. The UI uses locally vendored Three.js 0.170.0, local STL assets, and system fonts; rendering needs no CDN or font service.
 
@@ -123,9 +123,17 @@ The ultrasonic model samples five rays within its beam and returns the nearest r
 
 The logger samples at 5 Hz into a 64 KiB flash ring, separate from controller register RAM. Long outings overwrite oldest rows. Returned logs contain timestamps, readings, commands, and logger statistics, never true poses or geometry. The flash limit counts serialized sample payloads; transport metadata/JSON formatting are not included. The random seed makes identical runs repeatable. Different ROM random usage can change later range-noise samples; odometry uses its own seeded stream.
 
+## Photo arena
+
+`arena()` in `engine.mjs` rebuilds the physical table from one overhead photo. +x runs from the near end of the table to the far end, and +y from the photo's left to its right. The dock is on the black tape beside the open laptop, facing across the room. **Restore photo arena** returns to this layout.
+
+Measurements come from perspective geometry on that single photo, scaled by the laptop hinge, rover and tape roll, so expect errors of a few centimetres. Replace them with tape-measure values where accuracy matters. The cross wall separates two rooms, and the shipping box is the only route between them: its near doorway measures about 16 cm against the simulator's 15 cm collision diameter, leaving roughly 0.5 cm each side. The box's far side is not visible in the photo and is assumed open. Objective positions are placeholders, because the photo shows no beacons.
+
+On native Windows, run `python server.py` from `simulator/`; Opus experiments additionally need Windows Node.js 18+. `start.cmd` uses WSL instead. When the checkout is inside OneDrive, run recordings go to `~/rover-opus-runs` rather than `.runs/` to avoid sync locks; set `ROVER_RUNS` to choose another folder.
+
 ## Table and physics
 
-The default desk is 250 × 100 cm, with three 32 × 23 cm laptops, four Ø7 cm bottles, and two 34 × 28 cm shelters. Cardboard shelters have three 1 cm walls and a 15 cm-high roof; their left faces are open and interiors are traversable. Bottles have circular collision footprints; laptops have rectangular footprints. The table boundary stops movement instead of simulating falls.
+The default world is the photo arena described below. The earlier `tabletopArena()` preset is a 250 × 100 cm desk with three 32 × 23 cm laptops, four Ø7 cm bottles, and two 34 × 28 cm shelters. Cardboard shelters have three 1 cm walls and a 15 cm-high roof; their left faces are open and interiors are traversable. Bottles have circular collision footprints; laptops have rectangular footprints. The table boundary stops movement instead of simulating falls.
 
 Motion uses a conservative 7.5 cm circular robot radius in the photo profile (8.5 cm in legacy archives) and ideal holonomic kinematics on a flat surface. Swept moves advance in at most 0.5 cm increments, preventing tunneling through thin walls. The official robot CAD is converted from millimetres to centimetres for 1:1 display. Shell/casing/gripper assembly transforms are approximate; wheels, chassis, servo and display are procedural approximations. Asset provenance is in `assets/sources.json`; Three.js licensing is in `vendor/THREE-LICENSE.txt`.
 

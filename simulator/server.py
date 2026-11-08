@@ -1,31 +1,33 @@
 #!/usr/bin/env python3
 """Trusted human observer + dock/Claude orchestrator. Never put this in agent cwd."""
-import argparse, copy, hashlib, json, math, os, pathlib, re, shutil, signal, subprocess, threading, time, uuid
+import argparse, copy, hashlib, json, math, os, pathlib, re, shutil, subprocess, threading, time, uuid
 import replay
 import camera_archive
 import replay_render
 import supervisor
 from live_camera import LiveCamera
 import base64
-from runtime import find_node, node_script_path
+from runtime import find_node, node_available, node_script_path, terminate_tree
 from dock_data import calculate, project_ranges
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
 
 ROOT = pathlib.Path(__file__).resolve().parent
 WORKSPACES = pathlib.Path.home() / 'rover-opus-workspaces'
-RUNTIME = ROOT / '.runs'
-CONTRACT = (ROOT / 'opus-contract.txt').read_text()
+# Sync clients lock files mid-write, and a run appends constantly, so never record inside OneDrive.
+RUNTIME = pathlib.Path(os.environ['ROVER_RUNS']) if os.environ.get('ROVER_RUNS') else pathlib.Path.home() / 'rover-opus-runs' if any(part.lower().startswith('onedrive') for part in ROOT.parts) else ROOT / '.runs'
+CONTRACT = (ROOT / 'opus-contract.txt').read_text(encoding='utf-8')
 PROFILE='pan-sonar-light-v2'
 LEGACY_PROFILE='legacy-three-ray-v1'
 CLAUDE = shutil.which('claude')
 NODE = find_node()
+NODE_MISSING = 'Node.js 18+ was not found. Install it, set ROVER_NODE to its path, or launch with start.cmd to use WSL.'
 
 def node_path(path):
     return node_script_path(path, NODE)
 
 def node_validate(source, ram, world=None, profile=PROFILE):
-    result = subprocess.run([NODE, node_path(ROOT / 'validate.mjs')], input=json.dumps({'source':source,'ram':ram,'world':world,'profile':profile}), text=True, capture_output=True, timeout=15)
+    result = subprocess.run([NODE, node_path(ROOT / 'validate.mjs')], input=json.dumps({'source':source,'ram':ram,'world':world,'profile':profile}), text=True,encoding='utf-8',errors='replace', capture_output=True, timeout=15)
     try:
         out = json.loads(result.stdout)
     except ValueError:
@@ -49,8 +51,10 @@ def validate_map(m):
     if not isinstance(objects,list) or len(objects)>100:raise ValueError('Invalid desk objects')
     identities=set()
     for obj in objects:
-        if not position(obj) or obj.get('type') not in ('laptop','bottle','hidebox','shade','plant') or not isinstance(obj.get('id'),str) or not obj['id'] or obj['id'] in identities or not all(isinstance(obj.get(k),(int,float)) and not isinstance(obj[k],bool) and math.isfinite(obj[k]) and obj[k]>0 for k in ('w','h')) or obj['x']+obj['w']>250 or obj['y']+obj['h']>100:raise ValueError('Invalid desk object geometry or identity')
+        if not position(obj) or obj.get('type') not in ('laptop','bottle','hidebox','shade','plant','wall','tape') or not isinstance(obj.get('id'),str) or not obj['id'] or obj['id'] in identities or not all(isinstance(obj.get(k),(int,float)) and not isinstance(obj[k],bool) and math.isfinite(obj[k]) and obj[k]>0 for k in ('w','h')) or obj['x']+obj['w']>250 or obj['y']+obj['h']>100:raise ValueError('Invalid desk object geometry or identity')
         if obj.get('opening','left') not in ('left','right'):raise ValueError('Invalid shelter opening')
+        door=obj.get('door')
+        if door is not None and not (isinstance(door,list) and len(door)==2 and all(type(v) in (int,float) and math.isfinite(v) for v in door) and obj['y']<=door[0]<door[1]<=obj['y']+obj['h']):raise ValueError('Invalid shelter door')
         identities.add(obj['id'])
     return copy.deepcopy(m)
 
@@ -98,7 +102,7 @@ def verify_shelter_evidence(belief,agent):
 def read_agent(path, limit=262144):
     if path.is_symlink() or not path.is_file() or path.stat().st_size > limit:
         raise ValueError('Missing, oversized or symlinked workspace file: '+path.name)
-    return path.read_text()
+    return path.read_text(encoding='utf-8')
 
 def validate_debrief(value,expected):
     if not isinstance(value,dict) or 'observed_sortie' not in value or value.get('observed_sortie')!=expected:raise ValueError('debrief.json must identify the latest delivered observed_sortie (null initially)')
@@ -116,7 +120,7 @@ class Harness:
         states=sorted(RUNTIME.glob('*/observer-state.json'),key=lambda p:p.stat().st_mtime) if RUNTIME.exists() else []
         if states:
             try:
-                previous=json.loads(states[-1].read_text());agent=pathlib.Path(previous.get('workspace_path',''))
+                previous=json.loads(states[-1].read_text(encoding='utf-8'));agent=pathlib.Path(previous.get('workspace_path',''))
                 if agent.is_relative_to(WORKSPACES) and agent.is_dir():
                     previous.setdefault('config',{}).setdefault('sensorModel',LEGACY_PROFILE)
                     if previous.get('frame'):previous['frame'].setdefault('c',{}).setdefault('sensorModel',LEGACY_PROFILE)
@@ -124,7 +128,7 @@ class Harness:
                     if self.state.get('active'):
                         self.state.update(active=False,phase='interrupted',message='Server restarted during an experiment. Saved workspace is available; no undocked observations were recovered.')
                     eventfile=self.run/'events.jsonl'
-                    if eventfile.exists():self.events=[json.loads(line) for line in eventfile.read_text().splitlines()[-2000:]]
+                    if eventfile.exists():self.events=[json.loads(line) for line in eventfile.read_text(encoding='utf-8').splitlines()[-2000:]]
                     self.event_id=max((e['id'] for e in self.events),default=0)
             except (OSError,ValueError,KeyError):pass
     def event(self,kind,text,**extra):
@@ -133,17 +137,18 @@ class Harness:
             event={'id':self.event_id,'at':time.time(),'kind':kind,'text':str(text)[:20000],**extra}
             self.events.append(event);self.events=self.events[-2000:]
             if self.run:
-                with (self.run/'events.jsonl').open('a') as f:f.write(json.dumps(event)+'\n')
+                with (self.run/'events.jsonl').open('a',encoding='utf-8') as f:f.write(json.dumps(event)+'\n')
     def phase(self,phase,message):
         with self.lock:self.state.update(phase=phase,message=message,phase_started_at=time.time())
         self.event('harness',message,phase=phase);self.persist()
     def persist(self):
         with self.lock:
-            if self.run:(self.run/'observer-state.json').write_text(json.dumps(self.state))
+            if self.run:(self.run/'observer-state.json').write_text(json.dumps(self.state),encoding='utf-8')
     def start(self,body):
         with self.lock:
             if self.state['active']:raise ValueError('An experiment is already active')
             if not CLAUDE:raise ValueError('Claude Code is not installed')
+            if not node_available(NODE):raise ValueError(NODE_MISSING)
             world=validate_map(body.get('map'));c=hardware(body.get('config',{}));node_validate('yield',int(c['ram']),world,c['sensorModel'])
             rounds=int(body.get('rounds',8));speed=float(body.get('speed',8))
             if not 1<=rounds<=50 or not 1<=speed<=100:raise ValueError('Use 1–50 sorties and 1–100× speed')
@@ -156,12 +161,12 @@ class Harness:
             self.run=RUNTIME/run_id;self.run.mkdir(parents=True)
             self.agent=WORKSPACES/run_id/'agent';self.agent.mkdir(parents=True)
             (self.agent/'observations').mkdir()
-            (self.agent/'hardware.json').write_text(json.dumps(mission_hardware(c,len(world['targets']),budget,until_done),indent=2))
-            (self.agent/'inbox.json').write_text(json.dumps({'kind':'initial','observation_files':[],'objective_count':len(world['targets']),'confirmed_count':0,'until_done':until_done,'mission_seconds_remaining':budget,'mission_seconds_used':0,'message':'No environmental observations have been delivered. Design your first short returnable sortie. Mission clock, if configured, spans ALL sorties; planning at base is excluded.'},indent=2))
-            (self.agent/'controller.rom').write_text('; Write your first controller. Commands persist.\nmove 0\nyield\njmp 0\n')
-            (self.agent/'mission.json').write_text(json.dumps({'action':'deploy','max_seconds':30,'summary':'Awaiting Opus first design.'},indent=2))
-            (self.agent/'map.json').write_text(json.dumps({'frame':'dock-relative-cm','occupied':[],'free':[],'landmarks':[],'shelters':[],'notes':'Unknown. No observations yet.'},indent=2))
-            (self.agent/'notes.md').write_text('No observations yet. The environment is unknown.\n')
+            (self.agent/'hardware.json').write_text(json.dumps(mission_hardware(c,len(world['targets']),budget,until_done),indent=2),encoding='utf-8')
+            (self.agent/'inbox.json').write_text(json.dumps({'kind':'initial','observation_files':[],'objective_count':len(world['targets']),'confirmed_count':0,'until_done':until_done,'mission_seconds_remaining':budget,'mission_seconds_used':0,'message':'No environmental observations have been delivered. Design your first short returnable sortie. Mission clock, if configured, spans ALL sorties; planning at base is excluded.'},indent=2),encoding='utf-8')
+            (self.agent/'controller.rom').write_text('; Write your first controller. Commands persist.\nmove 0\nyield\njmp 0\n',encoding='utf-8')
+            (self.agent/'mission.json').write_text(json.dumps({'action':'deploy','max_seconds':30,'summary':'Awaiting Opus first design.'},indent=2),encoding='utf-8')
+            (self.agent/'map.json').write_text(json.dumps({'frame':'dock-relative-cm','occupied':[],'free':[],'landmarks':[],'shelters':[],'notes':'Unknown. No observations yet.'},indent=2),encoding='utf-8')
+            (self.agent/'notes.md').write_text('No observations yet. The environment is unknown.\n',encoding='utf-8')
             self.cancel.clear();self.events=[];self.event_id=0
             self.state={'active':True,'phase':'planning','run_id':run_id,'sortie':0,'message':'Starting Opus from an empty map.','frame':None,'world':world,'config':c,'turns':[],'workspace_path':str(self.agent),'until_done':until_done,'objective_count':len(world['targets']),'max_rounds':None if until_done else rounds,'speed':speed,'model':'opus','mission_seconds_limit':budget,'mission_seconds_used':0}
             self.thread=threading.Thread(target=self.loop,args=(world,c,rounds,speed),daemon=True);self.persist();self.thread.start()
@@ -182,14 +187,14 @@ class Harness:
             # Restage immutable inputs from trusted successful return records, never from failed/undocked sorties.
             c=self.state['config'];delivered=[]
             for path in sorted(self.run.glob('return-*.json')):
-                record=json.loads(path.read_text())
+                record=json.loads(path.read_text(encoding='utf-8'))
                 if record.get('result')=='docked' and record.get('upload'):
                     number=record['upload']['sortie'];name=f'observations/sortie-{number:03d}.json'
-                    (self.agent/name).write_text(json.dumps(record['upload'],indent=2));delivered.append(name)
-            (self.agent/'hardware.json').write_text(json.dumps(mission_hardware(c,len(self.state['world']['targets']),self.state.get('mission_seconds_limit'),self.state.get('until_done',False)),indent=2))
+                    (self.agent/name).write_text(json.dumps(record['upload'],indent=2),encoding='utf-8');delivered.append(name)
+            (self.agent/'hardware.json').write_text(json.dumps(mission_hardware(c,len(self.state['world']['targets']),self.state.get('mission_seconds_limit'),self.state.get('until_done',False)),indent=2),encoding='utf-8')
             inbox={'kind':'dock_return','latest_observation':delivered[-1],'observation_files':delivered,'message':'Continuing from a physically docked state with the existing workspace. No additional environmental observations were supplied.'} if delivered else {'kind':'initial','observation_files':[],'message':'Continuing initial planning. No environmental observations have been supplied.'}
             inbox.update(mission_seconds_remaining=self.mission_remaining(),mission_seconds_used=self.state.get('mission_seconds_used',0),objective_count=len(self.state['world']['targets']),confirmed_count=len((self.state.get('frame') or {}).get('found',[])),until_done=self.state.get('until_done',False))
-            (self.agent/'inbox.json').write_text(json.dumps(inbox,indent=2))
+            (self.agent/'inbox.json').write_text(json.dumps(inbox,indent=2),encoding='utf-8')
             start_turn=max((int(p.stem.split('-')[-1]) for p in self.run.glob('deployment-*.json')),default=0)+1
             self.cancel.clear();self.state.update(active=True,phase='planning',message='Continuing the existing docked workspace.',max_rounds=None if self.state.get('until_done') else start_turn+rounds-1,speed=speed)
             self.thread=threading.Thread(target=self.loop,args=(self.state['world'],c,rounds,speed,start_turn),daemon=True)
@@ -213,8 +218,7 @@ class Harness:
         self.cancel.set()
         with self.lock:p=self.process
         if p and p.poll() is None:
-            try:os.killpg(p.pid,signal.SIGTERM)
-            except ProcessLookupError:pass
+            terminate_tree(p)
         self.event('harness','Stop requested. No undocked data will be delivered.')
     def protected(self):
         return {str(p.relative_to(self.agent)):hashlib.sha256(p.read_bytes()).hexdigest() for p in [self.agent/'hardware.json',self.agent/'inbox.json',*(self.agent/'observations').glob('*.json')]}
@@ -235,7 +239,7 @@ class Harness:
                     seen[name]=digest
                     snapshot={'at':time.time(),'turn':turn,'file':name,'content':value}
                     with self.lock:
-                        with (self.run/f'updates-{turn:03d}.jsonl').open('a') as f:f.write(json.dumps(snapshot)+'\n')
+                        with (self.run/f'updates-{turn:03d}.jsonl').open('a',encoding='utf-8') as f:f.write(json.dumps(snapshot)+'\n')
                 except (OSError,ValueError):pass
             self.cancel.wait(.15)
     def review(self,body=None):
@@ -270,7 +274,7 @@ class Harness:
                         response={'id':identity,'operation':operation,'ok':True,'result':result}
                         self.event('analysis',f'{operation}: derived from already delivered data only.',turn=turn)
                     except Exception as e:response={'id':identity,'operation':operation,'ok':False,'error':str(e)}
-                    temp=agent/'.analysis-result.tmp';temp.write_text(json.dumps(response));temp.replace(agent/'analysis-result.json')
+                    temp=agent/'.analysis-result.tmp';temp.write_text(json.dumps(response),encoding='utf-8');temp.replace(agent/'analysis-result.json')
             except (OSError,ValueError):pass
             self.cancel.wait(.05)
     def plan(self,turn,review_only=False):
@@ -278,13 +282,13 @@ class Harness:
         try:prior_map=json.loads(read_agent(self.agent/'map.json'))
         except (ValueError,OSError):prior_map={}
         self.phase('reviewing' if review_only else 'planning',f'Opus turn {turn}: '+('reviewing the last return without deploying.' if review_only else 'reading only its workspace and dock-delivered evidence.'))
-        args=[CLAUDE,'-p','--model','opus','--effort','medium','--restricted','--safe-mode','--no-chrome','--disable-slash-commands','--setting-sources','','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--tools','Read,Write,Edit,Glob,Grep','--allowedTools','Read,Write,Edit,Glob,Grep','--permission-mode','dontAsk','--no-session-persistence','--output-format','stream-json','--include-partial-messages','--verbose','--system-prompt',(ROOT/'legacy/opus-contract-v1.txt').read_text() if self.state['config'].get('sensorModel')==LEGACY_PROFILE else CONTRACT]
+        args=[CLAUDE,'-p','--model','opus','--effort','medium','--restricted','--safe-mode','--no-chrome','--disable-slash-commands','--setting-sources','','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--tools','Read,Write,Edit,Glob,Grep','--allowedTools','Read,Write,Edit,Glob,Grep','--permission-mode','dontAsk','--no-session-persistence','--output-format','stream-json','--include-partial-messages','--verbose','--system-prompt',(ROOT/'legacy/opus-contract-v1.txt').read_text(encoding='utf-8') if self.state['config'].get('sensorModel')==LEGACY_PROFILE else CONTRACT]
         prompt=f'Automatic dock turn {turn}. Read inbox.json and hardware.json, and validation.txt if present; inspect your existing workspace and delivered observations, then update controller.rom, mission.json, map.json, notes.md, debrief.json and supervisor.json. Publish live.json immediately with one short public progress sentence, then refresh it after discoveries or plan changes while working. This is an evidence/action summary, not private reasoning. Publish a concise evidence/decision summary. Finish this turn after writing the files; the harness will validate and deploy them.'
         if review_only:prompt+=' This is REVIEW ONLY at the dock. Analyze the last delivered log and prepare an evidence-backed debrief and next ROM/plan. Nothing will be deployed during this call.'
         stderr_path=self.run/f'claude-{turn:03d}.stderr.log'
         streamed=False;result=None
-        with stderr_path.open('a') as err:
-            p=self.launch(args,cwd=self.agent,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=err,text=True,bufsize=1,env={**os.environ,'CLAUDE_CODE_DISABLE_AUTO_MEMORY':'1'})
+        with stderr_path.open('a',encoding='utf-8') as err:
+            p=self.launch(args,cwd=self.agent,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=err,text=True,encoding='utf-8',errors='replace',bufsize=1,env={**os.environ,'CLAUDE_CODE_DISABLE_AUTO_MEMORY':'1'})
             threading.Thread(target=self.analysis_loop,args=(p,self.agent,turn),daemon=True).start()
             threading.Thread(target=self.watch_workspace,args=(p,self.agent,turn),daemon=True).start()
             p.stdin.write(prompt);p.stdin.close()
@@ -317,7 +321,7 @@ class Harness:
             code=p.wait();p.stdout.close()
         if self.cancel.is_set():raise InterruptedError('Experiment stopped')
         if code or not result or result.get('is_error'):
-            detail=(result or {}).get('result') or stderr_path.read_text()[-1500:] or f'Claude exited {code} without a successful result'
+            detail=(result or {}).get('result') or stderr_path.read_text(encoding='utf-8')[-1500:] or f'Claude exited {code} without a successful result'
             raise RuntimeError(str(detail))
         if self.protected()!=before:raise RuntimeError('Agent modified an immutable hardware/inbox/observation file; deployment blocked.')
         mission=json.loads(read_agent(self.agent/'mission.json'));rom=read_agent(self.agent/'controller.rom',65536)
@@ -336,7 +340,7 @@ class Harness:
         archive=self.run/f'turn-{turn:03d}';archive.mkdir(exist_ok=True)
         for name in ('mission.json','controller.rom','map.json','notes.md','debrief.json','supervisor.json'):
             path=self.agent/name
-            if path.exists():(archive/name).write_text(read_agent(path))
+            if path.exists():(archive/name).write_text(read_agent(path),encoding='utf-8')
         summary=str(mission.get('summary',''))[:3000]
         with self.lock:
             self.state['turns']=[t for t in self.state['turns'] if t['turn']!=turn]
@@ -351,7 +355,7 @@ class Harness:
             try:self.plan(turn,review_only=True);return
             except ValueError as e:
                 if attempt==2:raise
-                (self.agent/'validation.txt').write_text('Review output validation failed; no new environment data exists. '+str(e))
+                (self.agent/'validation.txt').write_text('Review output validation failed; no new environment data exists. '+str(e),encoding='utf-8')
     def sortie(self,world,c,number,speed,mission,rom,found):
         with self.lock:self.state['deployed_rom']=rom
         self.phase('deployed',f'Sortie {number}: rover disconnected. Opus is idle until physical docking.')
@@ -360,9 +364,9 @@ class Harness:
         elapsed=self.state.get('mission_seconds_used',0);remaining=self.mission_remaining()
         if remaining is not None:
             job.update(mission_remaining=remaining,mission_elapsed=elapsed);job['max_seconds']=min(job['max_seconds'],remaining)
-        (self.run/f'deployment-{number:03d}.json').write_text(json.dumps(job))
-        with (self.run/f'rover-{number:03d}.stderr.log').open('w') as err:
-            p=self.launch([NODE,node_path(ROOT/'sortie.mjs')],cwd=ROOT,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=err,text=True,bufsize=1)
+        (self.run/f'deployment-{number:03d}.json').write_text(json.dumps(job),encoding='utf-8')
+        with (self.run/f'rover-{number:03d}.stderr.log').open('w',encoding='utf-8') as err:
+            p=self.launch([NODE,node_path(ROOT/'sortie.mjs')],cwd=ROOT,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=err,text=True,encoding='utf-8',errors='replace',bufsize=1)
             p.stdin.write(json.dumps(job));p.stdin.close();end=None
             for line in p.stdout:
                 if self.cancel.is_set():break
@@ -378,10 +382,10 @@ class Harness:
         with self.lock:
             self.state['frame']=end['state']
             self.state['mission_seconds_used']=round(elapsed+end['state']['t'],2)
-        (self.run/f'return-{number:03d}.json').write_text(json.dumps(end))
+        (self.run/f'return-{number:03d}.json').write_text(json.dumps(end),encoding='utf-8')
         return end
     def loop(self,world,c,rounds,speed,start_turn=1):
-        found=list((self.state.get('frame') or {}).get('found',[])) if start_turn>1 else [];delivered=[str(p.relative_to(self.agent)) for p in sorted((self.agent/'observations').glob('*.json'))]
+        found=list((self.state.get('frame') or {}).get('found',[])) if start_turn>1 else [];delivered=[p.relative_to(self.agent).as_posix() for p in sorted((self.agent/'observations').glob('*.json'))]
         try:
             turn=start_turn
             while self.state.get('until_done') or turn<start_turn+rounds:
@@ -397,15 +401,15 @@ class Harness:
                     except ValueError as e:
                         if attempt==2:raise
                         self.event('validation',str(e),turn=turn)
-                        (self.agent/'validation.txt').write_text('Your output was not deployed. Fix the following local output/ROM validation error. No new environment data exists.\n'+str(e))
+                        (self.agent/'validation.txt').write_text('Your output was not deployed. Fix the following local output/ROM validation error. No new environment data exists.\n'+str(e),encoding='utf-8')
                 if mission['action']=='finish':self.phase('finished','Opus ended the experiment: '+str(mission.get('summary','')));break
                 with self.lock:current_world=copy.deepcopy(self.state.get('world',world))
                 result=self.sortie(current_world,c,turn,speed,mission,rom,found)
                 if result['result']!='docked':
                     self.phase('time_limit' if result['result']=='mission_timeout' else 'stranded',f'Sortie {turn}: {result["result"]}. No observations uploaded; Opus has not seen this outing.');break
                 self.phase('downloading',f'Physical dock connection: downloading sortie {turn} observations and recharging.')
-                name=f'observations/sortie-{turn:03d}.json';(self.agent/name).write_text(json.dumps(result['upload'],indent=2));delivered.append(name);found=result['state']['found']
-                (self.agent/'inbox.json').write_text(json.dumps({'kind':'dock_return','latest_observation':name,'observation_files':delivered,'objective_count':len(current_world['targets']),'confirmed_count':len(found),'until_done':self.state.get('until_done',False),'mission_seconds_remaining':self.mission_remaining(),'mission_seconds_used':self.state.get('mission_seconds_used',0),'message':'Rover has physically docked, log uploaded, battery recharged, departure orientation restored. Review the new data and decide the next move.'},indent=2))
+                name=f'observations/sortie-{turn:03d}.json';(self.agent/name).write_text(json.dumps(result['upload'],indent=2),encoding='utf-8');delivered.append(name);found=result['state']['found']
+                (self.agent/'inbox.json').write_text(json.dumps({'kind':'dock_return','latest_observation':name,'observation_files':delivered,'objective_count':len(current_world['targets']),'confirmed_count':len(found),'until_done':self.state.get('until_done',False),'mission_seconds_remaining':self.mission_remaining(),'mission_seconds_used':self.state.get('mission_seconds_used',0),'message':'Rover has physically docked, log uploaded, battery recharged, departure orientation restored. Review the new data and decide the next move.'},indent=2),encoding='utf-8')
                 self.event('download',f'{name}: {len(result["upload"]["samples"])} samples, {result["upload"]["logger"]["dropped_samples"]} overwritten.')
                 self.persist()
                 complete=bool(current_world.get('targets')) and len(set(found))==len(current_world['targets'])
@@ -429,7 +433,7 @@ class Harness:
         files=[]
         for p in self.agent.rglob('*'):
             if p.is_file() and not p.is_symlink() and not any(part.startswith('.') for part in p.relative_to(self.agent).parts):
-                files.append({'path':str(p.relative_to(self.agent)),'bytes':p.stat().st_size,'mtime':p.stat().st_mtime})
+                files.append({'path':p.relative_to(self.agent).as_posix(),'bytes':p.stat().st_size,'mtime':p.stat().st_mtime})
                 if len(files)>=300:break
         estimate=None
         try:estimate=json.loads(read_agent(self.agent/'map.json'))
@@ -451,7 +455,7 @@ class Handler(SimpleHTTPRequestHandler):
     def translate_path(self,path):
         route=unquote(urlparse(path).path)
         distribution=ROOT/'web-dist'
-        if (distribution/'index.html').is_file() and (route in ('/','/index.html') or route.startswith('/ui-assets/')):
+        if (distribution/'index.html').is_file() and (route in ('/','/index.html') and parse_qs(urlparse(path).query).get('mode')!=['simulator'] or route.startswith('/ui-assets/')):
             target=(distribution/('index.html' if route in ('/','/index.html') else route.lstrip('/'))).resolve()
             if target.is_relative_to(distribution.resolve()):return str(target)
         return super().translate_path(path)
@@ -526,6 +530,7 @@ if __name__=='__main__':
     archive_ffmpeg=args.archive_ffmpeg or archive_ffmpeg
     camera=LiveCamera(args.camera_config,args.camera_python)
     print(f'Rover Lab + Opus dock harness: http://localhost:{args.port}',flush=True)
+    if not node_available(NODE):print('WARNING: '+NODE_MISSING+' Manual simulation still works; Opus experiments will not start.',flush=True)
     server=ThreadingHTTPServer(('127.0.0.1',args.port),Handler)
     try:server.serve_forever()
     except KeyboardInterrupt:harness.stop()

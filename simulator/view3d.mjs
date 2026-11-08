@@ -44,21 +44,23 @@ if(rfPlane.visible){const index=Math.min(map.targets.length-1,Number(document.ge
 host.dataset.rfVisible=String(rfPlane.visible);fillLight.intensity=legacy?2.5:.15+1.8*sim.c.lightLevel;sun.intensity=legacy?3.2:3.2*Math.max(.03,sim.c.lightLevel);model.visible=legacy;physical.group.visible=!legacy;physical.ble.visible=!legacy&&!!sim.c.ble;physical.head.rotation.y=-(sim.readings.pan||0)*Math.PI/180;host.dataset.hardware=legacy?'legacy-three-ray-v1':'pan-sonar-light-v2';host.dataset.headAngle=String(sim.readings.pan||0);const signature=JSON.stringify([map,truth,[...sim.found],legacy,sim.c.virtualRescue]);if(signature!==lastMap){lastMap=signature;disposeGroup(environment);if(truth){const dock=map.start;mesh(new T.CylinderGeometry(10,10,.3,48),mat('#245759',{emissive:'#285d5b',emissiveIntensity:.4}),environment,dock.x,.2,dock.y);const ring=mesh(new T.TorusGeometry(9.5,.3,6,48),mat('#7ce5df'),environment,dock.x,.45,dock.y);ring.rotation.x=Math.PI/2;box(environment,dock.x-7,1,dock.y,2,2,12,mat('#b8d7cf'));for(const b of map.obstacles.filter(b=>!b.owner))box(environment,b.x+b.w/2,7,b.y+b.h/2,b.w,14,b.h,mat('#71816e'));
 for(const obj of map.objects||[]){const {x,y,w,h,type}=obj;
 if(type==='laptop'){
-const silver=mat('#9ca4a4',{metalness:.65,roughness:.35});box(environment,x+w/2,.65,y+h/2,w,1.3,h,silver);box(environment,x+w/2,1.34,y+h*.43,w-3,.12,h*.46,mat('#293332'));box(environment,x+w/2,1.4,y+h*.8,9,.1,5,silver);
-const lid=new T.Group();lid.position.set(x+w/2,1.3,y+1);lid.rotation.x=-.17;environment.add(lid);box(lid,0,10,0,w,20,.7,silver);box(lid,0,10,.4,w-2,18,.15,mat('#254355',{emissive:'#31647c',emissiveIntensity:.25}));
+const silver=mat('#9ca4a4',{metalness:.65,roughness:.35}),holder=new T.Group();environment.add(holder);if(obj.hinge==='high'){holder.position.set(2*x+w,0,2*y+h);holder.rotation.y=Math.PI;}box(holder,x+w/2,.65,y+h/2,w,1.3,h,silver);box(holder,x+w/2,1.34,y+h*.43,w-3,.12,h*.46,mat('#293332'));box(holder,x+w/2,1.4,y+h*.8,9,.1,5,silver);
+const lid=new T.Group();lid.position.set(x+w/2,1.3,y+1);lid.rotation.x=-.17;holder.add(lid);box(lid,0,10,0,w,20,.7,silver);box(lid,0,10,.4,w-2,18,.15,mat('#254355',{emissive:'#31647c',emissiveIntensity:.25}));
 // Keyboard rows and screen content keep the laptop recognizable from above.
-for(let row=0;row<4;row++)for(let col=0;col<10;col++)box(environment,x+3+col*2.8,1.46,y+4+row*2,2,.1,1.1,black);
+for(let row=0;row<4;row++)for(let col=0;col<10;col++)box(holder,x+3+col*2.8,1.46,y+4+row*2,2,.1,1.1,black);
 for(let row=0;row<4;row++)box(lid,-3,14-row*2,.51,18-row*2,.3,.08,mat('#78b5c5'));
 }else if(type==='bottle'){
 const cx=x+w/2,cz=y+h/2;mesh(new T.CylinderGeometry(2.8,3.4,16,24),mat('#9acbde',{transparent:true,opacity:.65,roughness:.2}),environment,cx,9,cz);mesh(new T.CylinderGeometry(3.25,3.25,6,24),mat('#3f91a9',{transparent:true,opacity:.8}),environment,cx,8,cz);mesh(new T.CylinderGeometry(1.4,2.8,3,24),mat('#aed9df',{transparent:true,opacity:.7}),environment,cx,18.5,cz);mesh(new T.CylinderGeometry(1.5,1.5,2,20),mat('#2d77b8'),environment,cx,21,cz);
 }else if(type==='plant'){
-const cx=x+w/2,cz=y+h/2,wood=Math.round(x)%2===1;
+const cx=x+w/2,cz=y+h/2,wood=obj.wood??Math.round(x)%2===1;
 if(wood)box(environment,cx,4,cz,w,8,h,mat('#93623d'));else mesh(new T.CylinderGeometry(w/2,w*.38,8,24),mat('#252c29'),environment,cx,4,cz);
 mesh(new T.CylinderGeometry(w*.43,w*.43,.5,24),mat('#34291d'),environment,cx,8.2,cz);
 for(let layer=0;layer<3;layer++)for(let i=0;i<9;i++){const a=i*Math.PI*2/9+layer*.4,r=3-layer*.7;const leaf=mesh(new T.SphereGeometry(1,10,7),mat(layer===2?'#9ab384':'#477f50'),environment,cx+Math.cos(a)*r,9+layer*1.5,cz+Math.sin(a)*r);leaf.scale.set(2.2,.65,.9);leaf.rotation.y=-a;leaf.rotation.z=.3+layer*.15;}
+}else if(type==='wall'){box(environment,x+w/2,(obj.height||14)/2,y+h/2,w,obj.height||14,h,mat('#b58c59'));
+}else if(type==='tape'){box(environment,x+w/2,.4,y+h/2,w,.06,h,mat('#15181a'));
 }else if(type==='shade'){box(environment,x+w/2,12.5,y+h/2,w,1,h,mat('#526c72'));
 }else if(type==='hidebox'){
-const cardboard=mat('#b58c59'),edge=mat('#d0ab76');box(environment,x+w/2,7.5,y+.5,w,15,1,cardboard);box(environment,x+w/2,7.5,y+h-.5,w,15,1,cardboard);box(environment,obj.opening==='right'?x+.5:x+w-.5,7.5,y+h/2,1,15,h,cardboard);box(environment,x+w/2,15.5,y+h/2,w,1,h,cardboard);box(environment,x+w/2,16.1,y+h/2,w,0.1,3,edge);
+const cardboard=mat('#b58c59'),edge=mat('#d0ab76'),tall=obj.height||15,endX=obj.opening==='right'?x+.5:x+w-.5,doorTop=12;box(environment,x+w/2,tall/2,y+.5,w,tall,1,cardboard);box(environment,x+w/2,tall/2,y+h-.5,w,tall,1,cardboard);if(obj.door){const[a,b]=obj.door;box(environment,endX,tall/2,(y+a)/2,1,tall,a-y,cardboard);box(environment,endX,tall/2,(b+y+h)/2,1,tall,y+h-b,cardboard);box(environment,endX,(tall+doorTop)/2,(a+b)/2,1,tall-doorTop,b-a,cardboard);}else box(environment,endX,tall/2,y+h/2,1,tall,h,cardboard);box(environment,x+w/2,tall+.5,y+h/2,w,1,h,cardboard);box(environment,x+w/2,tall+1.1,y+h/2,w,0.1,3,edge);
 // Open left face is a real navigable entrance; the roof is overhead only.
 }
 }

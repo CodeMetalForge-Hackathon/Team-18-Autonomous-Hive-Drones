@@ -1,5 +1,5 @@
 // Empirical RF approximation, NOT a calibrated electromagnetic solver. cm and dBm.
-export const RF_LOSS_DB={laptop:8,bottle:4,plant:3,hidebox:2};
+export const RF_LOSS_DB={laptop:8,bottle:4,plant:3,hidebox:2,wall:2};
 function intersects(ax,ay,bx,by,b){
  if(b.shape==='circle'){const dx=bx-ax,dy=by-ay,t=Math.max(0,Math.min(1,((b.x+b.w/2-ax)*dx+(b.y+b.h/2-ay)*dy)/(dx*dx+dy*dy||1)));return Math.hypot(ax+t*dx-b.x-b.w/2,ay+t*dy-b.y-b.h/2)<=b.w/2;}
  let near=0,far=1;for(const [origin,delta,lo,hi]of [[ax,bx-ax,b.x,b.x+b.w],[ay,by-ay,b.y,b.y+b.h]]){if(Math.abs(delta)<1e-10){if(origin<lo||origin>hi)return false;}else{let a=(lo-origin)/delta,c=(hi-origin)/delta;if(a>c)[a,c]=[c,a];near=Math.max(near,a);far=Math.min(far,c);if(near>far)return false;}}return true;

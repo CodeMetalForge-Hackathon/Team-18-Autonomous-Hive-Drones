@@ -3,7 +3,7 @@ from runtime import node_script_path
 import copy, difflib, functools, json, pathlib, re, subprocess
 
 @functools.lru_cache(maxsize=256)
-def _load(path,mtime,size):return json.loads(pathlib.Path(path).read_text())
+def _load(path,mtime,size):return json.loads(pathlib.Path(path).read_text(encoding='utf-8'))
 def load(path):
     stat=path.stat();return _load(str(path),stat.st_mtime_ns,stat.st_size)
 def optional(path,default=None):
@@ -11,7 +11,7 @@ def optional(path,default=None):
     except (OSError,ValueError):return default
 
 def text(path):
-    try:return path.read_text()[:100000]
+    try:return path.read_text(encoding='utf-8')[:100000]
     except OSError:return ''
 
 def run_folder(root,run_id):
@@ -59,7 +59,7 @@ def reconstruct(job_path,job_mtime,return_path,return_mtime,engine_mtime,worker_
     job=load(pathlib.Path(job_path));
     if 'sensorModel' not in job['config'] or job['config']['sensorModel']=='legacy-three-ray-v1':worker_path=legacy_worker_path
     job={**job,'replay':True,'speed':100}
-    proc=subprocess.run([node,worker_path],input=json.dumps(job),text=True,capture_output=True,timeout=30)
+    proc=subprocess.run([node,worker_path],input=json.dumps(job),text=True,encoding='utf-8',errors='replace',capture_output=True,timeout=30)
     if proc.returncode:raise ValueError('Replay reconstruction failed: '+proc.stderr[:500])
     end=json.loads(proc.stdout.splitlines()[-1]);saved=load(pathlib.Path(return_path));a,b=end['state'],saved['state']
     exact=abs(a['t']-b['t'])<1e-7 and all(abs(a['robot'][k]-b['robot'][k])<1e-7 for k in ('x','y','a')) and a['found']==b['found'] and a['collisions']==b['collisions']
@@ -81,14 +81,14 @@ def dock_timeline(folder,number):
     """Published events and actual file snapshots from planning turn N+1, never thinking blocks."""
     turn=number+1;events=[];updates=[]
     try:
-        for line in (folder/'events.jsonl').read_text().splitlines():
+        for line in (folder/'events.jsonl').read_text(encoding='utf-8').splitlines():
             try:
                 e=json.loads(line)
                 if e.get('turn')==turn:events.append(e)
             except ValueError:continue
     except OSError:pass
     try:
-        updates=[json.loads(line) for line in (folder/f'updates-{turn:03d}.jsonl').read_text().splitlines()]
+        updates=[json.loads(line) for line in (folder/f'updates-{turn:03d}.jsonl').read_text(encoding='utf-8').splitlines()]
     except (OSError,ValueError):pass
     steps=[];has_updates=bool(updates);last_map=None
     for e in events:

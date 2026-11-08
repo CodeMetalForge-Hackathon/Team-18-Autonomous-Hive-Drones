@@ -58,7 +58,7 @@ def projection(harness):
         if not agent:return None
         p=agent/name
         if p.is_symlink() or not p.is_file() or p.stat().st_size>262144:return None
-        try:result=json.loads(p.read_text());stamp=max(stamp,p.stat().st_mtime);return result
+        try:result=json.loads(p.read_text(encoding='utf-8'));stamp=max(stamp,p.stat().st_mtime);return result
         except (OSError,ValueError):return None
     map_value=read('map.json');map_stamp=(agent/'map.json').stat().st_mtime if agent and (agent/'map.json').is_file() and not (agent/'map.json').is_symlink() else 0;brief=read('supervisor.json');debrief=read('debrief.json')
     reports=[];source='awaiting'
@@ -76,7 +76,7 @@ def projection(harness):
         if p.is_relative_to((agent/'observations').resolve()):
             try:
                 if p.stat().st_size<=262144:
-                    samples=json.loads(p.read_text()).get('samples',[])
+                    samples=json.loads(p.read_text(encoding='utf-8')).get('samples',[])
                     if samples:
                         s=samples[-1]['readings'];returned={'x':s['odom_x'],'y':s['odom_y'],'yaw':s['yaw'],'sortie':brief.get('observed_sortie') if isinstance(brief,dict) else debrief.get('observed_sortie') if isinstance(debrief,dict) else None}
             except (OSError,ValueError,KeyError):pass

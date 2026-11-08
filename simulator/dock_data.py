@@ -27,14 +27,14 @@ def calculate(expression):
 def project_ranges(root,files=None,cell_cm=5):
     root=pathlib.Path(root).resolve();cell=float(cell_cm)
     if not 2<=cell<=20:raise ValueError('Cell size must be 2..20 cm')
-    hardware=json.loads((root/'hardware.json').read_text());reach=hardware['range_max_cm'];noise=hardware['range_uniform_noise_cm'];occupied={};free={};bearings=[];sample_count=0;used=[];light_samples=[];ble_samples=[];shelter_checks=[];seen_ble=set();seen_pings=set()
-    files=files if files is not None else [str(p.relative_to(root)) for p in sorted((root/'observations').glob('*.json'))]
+    hardware=json.loads((root/'hardware.json').read_text(encoding='utf-8'));reach=hardware['range_max_cm'];noise=hardware['range_uniform_noise_cm'];occupied={};free={};bearings=[];sample_count=0;used=[];light_samples=[];ble_samples=[];shelter_checks=[];seen_ble=set();seen_pings=set()
+    files=files if files is not None else [p.relative_to(root).as_posix() for p in sorted((root/'observations').glob('*.json'))]
     if len(files)>50:raise ValueError('At most 50 delivered logs per call')
     def key(x,y):return(round(x/cell)*cell,round(y/cell)*cell)
     for name in files:
         p=(root/name).resolve()
         if not p.is_relative_to(root/'observations') or p.suffix!='.json' or not p.is_file() or p.stat().st_size>262144:raise ValueError('Only delivered observation JSON files are available')
-        log=json.loads(p.read_text());used.append(name)
+        log=json.loads(p.read_text(encoding='utf-8'));used.append(name)
         for check in log.get('safety_checks',[]):shelter_checks.append({'file':name,**{k:check[k] for k in ('time','safe','dock','light','dwell','odom_x','odom_y','yaw') if k in check}})
         for row in log['samples']:
             s=row['readings'];x,y,yaw=s['odom_x'],s['odom_y'],s['yaw'];sample_count+=1

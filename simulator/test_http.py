@@ -15,6 +15,8 @@ class HttpBoundaryTests(unittest.TestCase):
         c.request(method,path,body=body,headers=headers);r=c.getresponse();status=r.status;r.read();c.close();return status
     def test_local_page_and_status(self):
         self.assertEqual(self.request('/'),200);self.assertEqual(self.request('/api/status'),200)
+    def test_simulator_page_is_reachable(self):
+        c=http.client.HTTPConnection('127.0.0.1',self.port,timeout=5);c.request('GET','/?mode=simulator');response=c.getresponse();body=response.read().decode();c.close();self.assertEqual(response.status,200);self.assertIn('simulator-mode',body)
     def test_supervisor_route_excludes_observer_truth(self):
         c=http.client.HTTPConnection('127.0.0.1',self.port,timeout=5);c.request('GET','/api/supervisor');response=c.getresponse();self.assertEqual(response.status,200);data=json.loads(response.read());c.close();self.assertNotIn('world',data);self.assertNotIn('frame',data);self.assertNotIn('config',data);self.assertLessEqual(len(data['reports']),3)
     def test_unexpected_host_rejected_for_reads_and_controls(self):
